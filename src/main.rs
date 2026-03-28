@@ -1,8 +1,8 @@
 //! CLI entry point for the CodeTracer Fuel recorder.
 //!
-//! Supports the `record` subcommand which builds a Sway project, executes it
-//! on an embedded FuelVM instance with single-stepping, and writes the
-//! CodeTracer trace output files.
+//! Supports the `record` subcommand which either:
+//! - Builds a Sway project and executes it (when a project dir with Forc.toml is given)
+//! - Executes raw FuelVM bytecode from a .bin file (when --bytecode is given)
 //!
 //! # Usage
 //!
@@ -10,12 +10,20 @@
 //! codetracer-fuel-recorder record <PROJECT_DIR> \
 //!     -o <output-dir> \
 //!     [-f binary|json]
+//!
+//! codetracer-fuel-recorder record --bytecode <FILE.bin> \
+//!     -o <output-dir> \
+//!     [-f binary|json]
 //! ```
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use codetracer_trace_writer::TraceEventsFileFormat;
 use eyre::{Context, Result};
+
+use codetracer_fuel_recorder::recorder::FuelRecorder;
+use codetracer_fuel_recorder::source_map::SwaySourceMap;
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -35,11 +43,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Build and record a Sway project.
+    /// Build and record a Sway project, or record raw FuelVM bytecode.
     ///
-    /// Compiles the Sway project at PROJECT_DIR (must contain a Forc.toml),
-    /// executes it on an embedded FuelVM instance, and writes the CodeTracer
-    /// trace files to the output directory.
+    /// When PROJECT_DIR is given (must contain a Forc.toml), compiles and
+    /// executes the Sway project. When --bytecode is given, executes raw
+    /// FuelVM bytecode from a .bin file.
     Record(RecordArgs),
 
     /// Print version information.
@@ -55,7 +63,12 @@ enum OutputFormat {
 #[derive(Debug, clap::Args)]
 struct RecordArgs {
     /// Path to the Sway project directory (must contain Forc.toml).
-    project_dir: PathBuf,
+    /// Not required when --bytecode is provided.
+    project_dir: Option<PathBuf>,
+
+    /// Path to a raw FuelVM bytecode file (.bin).
+    #[arg(long = "bytecode")]
+    bytecode: Option<PathBuf>,
 
     /// Directory where the trace files will be written.
     ///
@@ -87,16 +100,29 @@ fn main() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// `record` implementation (stub)
+// `record` implementation
 // ---------------------------------------------------------------------------
 
 /// Execute the `record` subcommand.
 fn record(args: RecordArgs) -> Result<()> {
-    // 1. Validate project directory and Forc.toml
-    let project_dir = args
-        .project_dir
+    let format = match args.format {
+        OutputFormat::Binary => TraceEventsFileFormat::Binary,
+        OutputFormat::Json => TraceEventsFileFormat::Json,
+    };
+
+    if let Some(bytecode_path) = &args.bytecode {
+        // Bytecode mode: read raw bytecode from .bin file
+        return record_bytecode(bytecode_path, &args.out_dir, format);
+    }
+
+    // Project dir mode: validate and record a Sway project
+    let project_dir_arg = args.project_dir.ok_or_else(|| {
+        eyre::eyre!("either PROJECT_DIR or --bytecode must be provided")
+    })?;
+
+    let project_dir = project_dir_arg
         .canonicalize()
-        .with_context(|| format!("project directory not found: {}", args.project_dir.display()))?;
+        .with_context(|| format!("project directory not found: {}", project_dir_arg.display()))?;
 
     let forc_toml = project_dir.join("Forc.toml");
     if !forc_toml.exists() {
@@ -112,15 +138,14 @@ fn record(args: RecordArgs) -> Result<()> {
         forc_toml.display()
     );
 
-    // 2. Recording not yet implemented
-    eprintln!("Recording not yet implemented");
+    // Recording from Forc.toml not yet implemented (needs forc-pkg)
+    eprintln!("Recording not yet implemented for Sway projects (use --bytecode for raw bytecode)");
 
-    // 3. Create output directory
+    // Create output directory and write placeholder files (backwards compat)
     let out_dir = &args.out_dir;
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
-    // 4. Write placeholder trace files
     let metadata = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "recorder": "codetracer-fuel-recorder",
@@ -154,5 +179,36 @@ fn record(args: RecordArgs) -> Result<()> {
     eprintln!("  trace_metadata.json");
     eprintln!("  trace_paths.json");
 
+    Ok(())
+}
+
+/// Record a trace from raw FuelVM bytecode.
+fn record_bytecode(
+    bytecode_path: &PathBuf,
+    out_dir: &PathBuf,
+    format: TraceEventsFileFormat,
+) -> Result<()> {
+    let bytecode = std::fs::read(bytecode_path)
+        .with_context(|| format!("failed to read bytecode file: {}", bytecode_path.display()))?;
+
+    let program_name = bytecode_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("fuel-program");
+
+    // Create a synthetic source file path
+    let source_path = bytecode_path.with_extension("sw");
+
+    // Create a simple line mapping (one instruction per line)
+    let num_instructions = bytecode.len() / 4;
+    let entries: Vec<(usize, PathBuf, u32)> = (0..num_instructions)
+        .map(|i| (i, source_path.clone(), (i + 1) as u32))
+        .collect();
+    let source_map = SwaySourceMap::from_line_mapping(entries);
+
+    let recorder = FuelRecorder::new(program_name, out_dir, format);
+    recorder.record(bytecode, &source_map, &source_path)?;
+
+    eprintln!("Trace output written to {}", out_dir.display());
     Ok(())
 }

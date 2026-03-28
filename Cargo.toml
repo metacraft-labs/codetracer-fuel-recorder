@@ -11,6 +11,12 @@ license = "Apache-2.0"
 codetracer_trace_types = "0.16"
 codetracer_trace_writer = "0.17"
 
+# FuelVM
+fuel-vm = { version = "0.58", features = ["test-helpers"] }
+fuel-tx = { version = "0.58", features = ["test-helpers"] }
+fuel-asm = "0.58"
+fuel-types = "0.58"
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
