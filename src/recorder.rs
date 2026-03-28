@@ -1,38 +1,153 @@
-//! Stub recording logic for FuelVM execution traces.
+//! FuelVM execution trace recorder.
 //!
-//! This module will be implemented in M2 to process FuelVM single-step events
-//! and produce CodeTracer trace output.
+//! Processes FuelVM single-step events and produces CodeTracer trace output
+//! using the TraceWriter API.
 
-use eyre::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use codetracer_trace_types::{Line, TypeKind, ValueRecord, NONE_VALUE};
+use codetracer_trace_writer::trace_writer::TraceWriter;
+use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
+use eyre::{Context, Result};
+use fuel_tx::Receipt;
+
+use crate::interpreter::FuelInterpreter;
+use crate::source_map::SwaySourceMap;
 
 /// The main recorder that processes FuelVM execution events into CodeTracer
 /// trace format.
 pub struct FuelRecorder {
-    /// Name of the Sway program being recorded.
+    /// Name of the program being recorded.
     pub program_name: String,
     /// Output directory for trace files.
-    pub trace_dir: std::path::PathBuf,
+    pub trace_dir: PathBuf,
+    /// Output format.
+    pub format: TraceEventsFileFormat,
 }
 
 impl FuelRecorder {
     /// Create a new FuelRecorder.
-    pub fn new(program_name: &str, trace_dir: &Path) -> Result<Self> {
-        Ok(Self {
+    pub fn new(program_name: &str, trace_dir: &Path, format: TraceEventsFileFormat) -> Self {
+        Self {
             program_name: program_name.to_string(),
             trace_dir: trace_dir.to_path_buf(),
-        })
+            format,
+        }
     }
 
-    /// Initialize the recorder (prepare trace writer, etc.).
-    pub fn initialize(&mut self) -> Result<()> {
-        // TODO: M2 — initialize trace writer
-        Ok(())
-    }
+    /// Record a FuelVM execution trace.
+    ///
+    /// Takes bytecode and an optional source map, executes the bytecode with
+    /// single-stepping, and writes CodeTracer trace files.
+    pub fn record(
+        &self,
+        bytecode: Vec<u8>,
+        source_map: &SwaySourceMap,
+        source_path: &Path,
+    ) -> Result<()> {
+        // Create trace writer
+        let mut writer = create_trace_writer(&self.program_name, &[], self.format);
 
-    /// Finalize the recorder and flush all trace data.
-    pub fn finalize(&mut self) -> Result<()> {
-        // TODO: M2 — finalize trace writer
+        // Create output directory
+        std::fs::create_dir_all(&self.trace_dir)
+            .with_context(|| format!("cannot create output dir: {}", self.trace_dir.display()))?;
+
+        let events_path = self.trace_dir.join("trace.bin");
+        let metadata_path = self.trace_dir.join("trace_metadata.json");
+        let paths_path = self.trace_dir.join("trace_paths.json");
+
+        // Initialize trace files
+        TraceWriter::begin_writing_trace_events(&mut *writer, &events_path)
+            .map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::begin_writing_trace_metadata(&mut *writer, &metadata_path)
+            .map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::begin_writing_trace_paths(&mut *writer, &paths_path)
+            .map_err(|e| eyre::eyre!("{e}"))?;
+
+        // Start the trace
+        TraceWriter::start(&mut *writer, source_path, Line(1));
+
+        // Register the "u64" type (after start, so that "None" gets TypeId(0))
+        let u64_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u64");
+
+        // Register a main function
+        let main_fn_id = TraceWriter::ensure_function_id(
+            &mut *writer,
+            "main",
+            source_path,
+            Line(1),
+        );
+        TraceWriter::register_call(&mut *writer, main_fn_id, vec![]);
+
+        // Create interpreter and run with single-stepping
+        let interp = FuelInterpreter::new(bytecode)?;
+
+        let mut prev_line: Option<u32> = None;
+        let mut prev_receipt_count: usize = 0;
+
+        interp.run_with_callback(|step| {
+            // Calculate the opcode index from PC (each instruction is 4 bytes)
+            let opcode_index = (step.pc / 4) as usize;
+
+            // Look up source location
+            let (step_path, line) = if let Some((path, line)) = source_map.lookup(opcode_index) {
+                (path.to_path_buf(), line)
+            } else {
+                // If no mapping, use the source path with opcode index as line
+                (source_path.to_path_buf(), (opcode_index + 1) as u32)
+            };
+
+            // Emit step if line changed
+            if prev_line != Some(line) {
+                TraceWriter::register_step(&mut *writer, &step_path, Line(line as i64));
+                prev_line = Some(line);
+            }
+
+            // Emit register values for the general-purpose registers r16-r23
+            for reg_idx in 0x10..=0x17 {
+                let reg_val = step.registers[reg_idx];
+                let name = format!("r{}", reg_idx);
+                let value = ValueRecord::Int {
+                    i: reg_val as i64,
+                    type_id: u64_type_id,
+                };
+                TraceWriter::register_variable_with_full_value(&mut *writer, &name, value);
+            }
+
+            // Detect Call/Return receipts
+            let new_receipts = &step.receipts[prev_receipt_count..];
+            for receipt in new_receipts {
+                match receipt {
+                    Receipt::Call { to, .. } => {
+                        let contract_name = format!("contract:{}", to);
+                        let fn_id = TraceWriter::ensure_function_id(
+                            &mut *writer,
+                            &contract_name,
+                            &step_path,
+                            Line(line as i64),
+                        );
+                        TraceWriter::register_call(&mut *writer, fn_id, vec![]);
+                    }
+                    Receipt::Return { .. } | Receipt::ReturnData { .. } => {
+                        TraceWriter::register_return(&mut *writer, NONE_VALUE);
+                    }
+                    _ => {}
+                }
+            }
+            prev_receipt_count = step.receipts.len();
+        })?;
+
+        // Emit return for main
+        TraceWriter::register_return(&mut *writer, NONE_VALUE);
+
+        // Finish writing
+        TraceWriter::finish_writing_trace_events(&mut *writer)
+            .map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_metadata(&mut *writer)
+            .map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_paths(&mut *writer)
+            .map_err(|e| eyre::eyre!("{e}"))?;
+
         Ok(())
     }
 }
