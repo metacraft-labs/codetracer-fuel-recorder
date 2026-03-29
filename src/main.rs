@@ -84,6 +84,15 @@ struct RecordArgs {
     /// Path to a Sway ABI JSON file for variable name enrichment.
     #[arg(long = "abi")]
     abi: Option<PathBuf>,
+
+    /// GraphQL debug API endpoint for remote tracing fallback.
+    ///
+    /// When provided, the recorder can use fuel-core's GraphQL debug API
+    /// instead of embedded fuel-vm execution. Requires fuel-core to be
+    /// running with --debug. Note: this is slow (one round-trip per
+    /// instruction) and is only recommended as a fallback.
+    #[arg(long = "graphql-endpoint")]
+    graphql_endpoint: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

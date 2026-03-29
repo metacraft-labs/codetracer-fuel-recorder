@@ -9,9 +9,9 @@ use codetracer_trace_types::{Line, TypeKind, ValueRecord, NONE_VALUE};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 use eyre::{Context, Result};
-use fuel_tx::Receipt;
 
 use crate::abi_decoder::AbiSchema;
+use crate::contract_call::ContractCallTracker;
 use crate::interpreter::FuelInterpreter;
 use crate::source_map::SwaySourceMap;
 use crate::variable_tracker::VariableTracker;
@@ -105,23 +105,45 @@ impl FuelRecorder {
             tracker.set_abi(abi, "main");
         }
 
+        // Set up contract call tracker
+        let mut call_tracker = ContractCallTracker::new();
+
         // Create interpreter and run with single-stepping
         let interp = FuelInterpreter::new(bytecode)?;
 
         let mut prev_line: Option<u32> = None;
-        let mut prev_receipt_count: usize = 0;
 
         interp.run_with_callback(|step| {
             // Calculate the opcode index from PC (each instruction is 4 bytes)
             let opcode_index = (step.pc / 4) as usize;
 
-            // Look up source location
-            let (step_path, line) = if let Some((path, line)) = source_map.lookup(opcode_index) {
-                (path.to_path_buf(), line)
-            } else {
-                // If no mapping, use the source path with opcode index as line
-                (source_path.to_path_buf(), (opcode_index + 1) as u32)
-            };
+            // Process receipts through contract call tracker to detect context switches
+            let switches = call_tracker.process_receipts(&step.receipts);
+
+            // Emit Call/Return events for contract switches
+            for switch in &switches {
+                match switch {
+                    crate::contract_call::ContractSwitch::Enter { to, .. } => {
+                        let contract_name = format!("contract:{}", to);
+                        let switch_path = call_tracker.current_source_path(source_path);
+                        let fn_id = TraceWriter::ensure_function_id(
+                            &mut *writer,
+                            &contract_name,
+                            switch_path,
+                            Line(1),
+                        );
+                        TraceWriter::register_call(&mut *writer, fn_id, vec![]);
+                    }
+                    crate::contract_call::ContractSwitch::Exit { .. } => {
+                        TraceWriter::register_return(&mut *writer, NONE_VALUE);
+                    }
+                }
+            }
+
+            // Look up source location using contract-aware tracker
+            let (lookup_path, line) =
+                call_tracker.lookup_source(opcode_index, source_map, source_path);
+            let step_path = lookup_path.to_path_buf();
 
             // Emit step if line changed
             if prev_line != Some(line) {
@@ -152,28 +174,6 @@ impl FuelRecorder {
                 };
                 TraceWriter::register_variable_with_full_value(&mut *writer, &name, value);
             }
-
-            // Detect Call/Return receipts
-            let new_receipts = &step.receipts[prev_receipt_count..];
-            for receipt in new_receipts {
-                match receipt {
-                    Receipt::Call { to, .. } => {
-                        let contract_name = format!("contract:{}", to);
-                        let fn_id = TraceWriter::ensure_function_id(
-                            &mut *writer,
-                            &contract_name,
-                            &step_path,
-                            Line(line as i64),
-                        );
-                        TraceWriter::register_call(&mut *writer, fn_id, vec![]);
-                    }
-                    Receipt::Return { .. } | Receipt::ReturnData { .. } => {
-                        TraceWriter::register_return(&mut *writer, NONE_VALUE);
-                    }
-                    _ => {}
-                }
-            }
-            prev_receipt_count = step.receipts.len();
         })?;
 
         // Emit return for main
