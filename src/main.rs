@@ -24,6 +24,7 @@ use eyre::{Context, Result};
 
 use codetracer_fuel_recorder::abi_decoder::AbiSchema;
 use codetracer_fuel_recorder::recorder::FuelRecorder;
+use codetracer_fuel_recorder::replay::{self, ReplayConfig};
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
 
 // ---------------------------------------------------------------------------
@@ -50,6 +51,13 @@ enum Commands {
     /// executes the Sway project. When --bytecode is given, executes raw
     /// FuelVM bytecode from a .bin file.
     Record(RecordArgs),
+
+    /// Replay an on-chain transaction from a fuel-core node.
+    ///
+    /// Fetches a transaction by ID from a fuel-core GraphQL API, extracts
+    /// involved contracts, fetches their bytecode, and replays via dryRun
+    /// or historical execution.
+    Replay(ReplayArgs),
 
     /// Print version information.
     Version,
@@ -95,6 +103,35 @@ struct RecordArgs {
     graphql_endpoint: Option<String>,
 }
 
+#[derive(Debug, clap::Args)]
+struct ReplayArgs {
+    /// GraphQL RPC URL of the fuel-core node.
+    #[arg(long = "rpc-url", default_value = "http://localhost:4000/v1/graphql")]
+    rpc_url: String,
+
+    /// Transaction ID to replay (hex string with 0x prefix).
+    #[arg(long = "tx-id")]
+    tx_id: String,
+
+    /// Directory containing forc build output for source maps.
+    ///
+    /// When provided, the replayer will look for source maps in
+    /// `<source-dir>/out/debug/` to enable source-level debugging.
+    /// Without this, only disassembly-level replay is available.
+    #[arg(long = "source-dir")]
+    source_dir: Option<PathBuf>,
+
+    /// Directory where the replay output will be written.
+    #[arg(short = 'o', long = "out-dir", default_value = "./ct-traces/")]
+    out_dir: PathBuf,
+
+    /// Enable historical execution (state rewind) for replay at the
+    /// original block height. Requires fuel-core running with
+    /// --historical-execution flag.
+    #[arg(long = "historical-execution")]
+    historical_execution: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -103,6 +140,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Record(args) => record(args),
+        Commands::Replay(args) => run_replay(args),
         Commands::Version => {
             println!(
                 "codetracer-fuel-recorder {}",
@@ -238,5 +276,38 @@ fn record_bytecode(
     recorder.record(bytecode, &source_map, &source_path)?;
 
     eprintln!("Trace output written to {}", out_dir.display());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `replay` implementation
+// ---------------------------------------------------------------------------
+
+/// Execute the `replay` subcommand.
+fn run_replay(args: ReplayArgs) -> Result<()> {
+    let config = ReplayConfig {
+        rpc_url: args.rpc_url,
+        tx_id: args.tx_id,
+        source_dir: args.source_dir,
+        output_dir: args.out_dir,
+        historical_execution: args.historical_execution,
+    };
+
+    let summary = replay::replay_transaction(&config)?;
+
+    eprintln!();
+    eprintln!("Replay complete:");
+    eprintln!("  Transaction: {}", summary.tx_id);
+    if let Some(height) = summary.block_height {
+        eprintln!("  Block height: {}", height);
+    }
+    eprintln!("  Contracts: {}", summary.contract_ids.len());
+    eprintln!(
+        "  Bytecode fetched: {}",
+        summary.contracts_with_bytecode
+    );
+    eprintln!("  Source maps: {}", summary.has_source_maps);
+    eprintln!("  Dry run receipts: {}", summary.dry_run_receipts);
+
     Ok(())
 }
