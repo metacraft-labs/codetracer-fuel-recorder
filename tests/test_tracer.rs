@@ -149,14 +149,20 @@ fn test_fuel_variable_extraction() {
         })
         .collect();
 
-    // Verify that r16 and r17 appear (the first two registers we set)
+    // Verify that the first two registers have inferred names from MOVI
+    // (r16 = MOVI 10 -> "imm_10", r17 = MOVI 32 -> "imm_32")
+    // or their raw register names as fallback.
+    let has_r16_name = var_names.contains(&"r16".to_string())
+        || var_names.contains(&"imm_10".to_string());
     assert!(
-        var_names.contains(&"r16".to_string()),
-        "should have r16 variable, got names: {var_names:?}"
+        has_r16_name,
+        "should have r16 or imm_10 variable, got names: {var_names:?}"
     );
+    let has_r17_name = var_names.contains(&"r17".to_string())
+        || var_names.contains(&"imm_32".to_string());
     assert!(
-        var_names.contains(&"r17".to_string()),
-        "should have r17 variable, got names: {var_names:?}"
+        has_r17_name,
+        "should have r17 or imm_32 variable, got names: {var_names:?}"
     );
 
     // Verify some Value events contain actual computed values
