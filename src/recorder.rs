@@ -11,8 +11,10 @@ use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 use eyre::{Context, Result};
 use fuel_tx::Receipt;
 
+use crate::abi_decoder::AbiSchema;
 use crate::interpreter::FuelInterpreter;
 use crate::source_map::SwaySourceMap;
+use crate::variable_tracker::VariableTracker;
 
 /// The main recorder that processes FuelVM execution events into CodeTracer
 /// trace format.
@@ -23,6 +25,8 @@ pub struct FuelRecorder {
     pub trace_dir: PathBuf,
     /// Output format.
     pub format: TraceEventsFileFormat,
+    /// Optional ABI schema for variable name enrichment.
+    pub abi: Option<AbiSchema>,
 }
 
 impl FuelRecorder {
@@ -32,6 +36,22 @@ impl FuelRecorder {
             program_name: program_name.to_string(),
             trace_dir: trace_dir.to_path_buf(),
             format,
+            abi: None,
+        }
+    }
+
+    /// Create a new FuelRecorder with ABI information for variable enrichment.
+    pub fn with_abi(
+        program_name: &str,
+        trace_dir: &Path,
+        format: TraceEventsFileFormat,
+        abi: AbiSchema,
+    ) -> Self {
+        Self {
+            program_name: program_name.to_string(),
+            trace_dir: trace_dir.to_path_buf(),
+            format,
+            abi: Some(abi),
         }
     }
 
@@ -79,6 +99,12 @@ impl FuelRecorder {
         );
         TraceWriter::register_call(&mut *writer, main_fn_id, vec![]);
 
+        // Set up variable tracker
+        let mut tracker = VariableTracker::new();
+        if let Some(abi) = &self.abi {
+            tracker.set_abi(abi, "main");
+        }
+
         // Create interpreter and run with single-stepping
         let interp = FuelInterpreter::new(bytecode)?;
 
@@ -103,10 +129,23 @@ impl FuelRecorder {
                 prev_line = Some(line);
             }
 
+            // Process step through variable tracker
+            let tracked_vars = tracker.process_step(step);
+
             // Emit register values for the general-purpose registers r16-r23
             for reg_idx in 0x10..=0x17 {
                 let reg_val = step.registers[reg_idx];
-                let name = format!("r{}", reg_idx);
+
+                // Use tracked variable name if available, otherwise fall
+                // back to the raw register name.
+                let name = if let Some(tracked) = tracked_vars.iter().find(|v| v.register == reg_idx) {
+                    tracked.name.clone()
+                } else if let Some(inferred) = tracker.get_name(reg_idx) {
+                    inferred.to_string()
+                } else {
+                    format!("r{}", reg_idx)
+                };
+
                 let value = ValueRecord::Int {
                     i: reg_val as i64,
                     type_id: u64_type_id,

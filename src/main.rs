@@ -22,6 +22,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use codetracer_trace_writer::TraceEventsFileFormat;
 use eyre::{Context, Result};
 
+use codetracer_fuel_recorder::abi_decoder::AbiSchema;
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
 
@@ -79,6 +80,10 @@ struct RecordArgs {
     /// Output format for the trace.
     #[arg(short = 'f', long = "format", default_value = "binary")]
     format: OutputFormat,
+
+    /// Path to a Sway ABI JSON file for variable name enrichment.
+    #[arg(long = "abi")]
+    abi: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,9 +115,18 @@ fn record(args: RecordArgs) -> Result<()> {
         OutputFormat::Json => TraceEventsFileFormat::Json,
     };
 
+    // Load ABI if provided
+    let abi = if let Some(abi_path) = &args.abi {
+        let abi_json = std::fs::read_to_string(abi_path)
+            .with_context(|| format!("failed to read ABI file: {}", abi_path.display()))?;
+        Some(AbiSchema::from_json(&abi_json)?)
+    } else {
+        None
+    };
+
     if let Some(bytecode_path) = &args.bytecode {
         // Bytecode mode: read raw bytecode from .bin file
-        return record_bytecode(bytecode_path, &args.out_dir, format);
+        return record_bytecode(bytecode_path, &args.out_dir, format, abi);
     }
 
     // Project dir mode: validate and record a Sway project
@@ -187,6 +201,7 @@ fn record_bytecode(
     bytecode_path: &PathBuf,
     out_dir: &PathBuf,
     format: TraceEventsFileFormat,
+    abi: Option<AbiSchema>,
 ) -> Result<()> {
     let bytecode = std::fs::read(bytecode_path)
         .with_context(|| format!("failed to read bytecode file: {}", bytecode_path.display()))?;
@@ -206,7 +221,11 @@ fn record_bytecode(
         .collect();
     let source_map = SwaySourceMap::from_line_mapping(entries);
 
-    let recorder = FuelRecorder::new(program_name, out_dir, format);
+    let recorder = if let Some(abi) = abi {
+        FuelRecorder::with_abi(program_name, out_dir, format, abi)
+    } else {
+        FuelRecorder::new(program_name, out_dir, format)
+    };
     recorder.record(bytecode, &source_map, &source_path)?;
 
     eprintln!("Trace output written to {}", out_dir.display());
