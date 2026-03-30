@@ -686,7 +686,7 @@ fn test_output_types_parsing() {
         _ => panic!("expected ContractCreated"),
     }
 
-    matches!(&tx_data.outputs[2], TransactionOutput::Unknown);
+    assert!(matches!(&tx_data.outputs[2], TransactionOutput::Unknown), "expected outputs[2] to be TransactionOutput::Unknown, got {:?}", &tx_data.outputs[2]);
 }
 
 #[test]
