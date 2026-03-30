@@ -1232,3 +1232,379 @@ fn test_all_tracked_registers() {
         );
     }
 }
+
+// =========================================================================
+// 9. M2: Real E2E Recorder Tests
+// =========================================================================
+
+/// M2 Deliverable 1: While loop iteration test (sum_to_n).
+///
+/// Builds a while loop that computes sum = 1 + 2 + ... + n using bytecode,
+/// executes through FuelInterpreter, and verifies the counter and accumulator
+/// values at EACH iteration in the trace (not just the final values).
+///
+/// sum_to(5) = 1+2+3+4+5 = 15
+#[test]
+fn test_m2_while_loop_iteration_values() {
+    let probe: Vec<u8> = vec![op::ret(RegId::ONE)].into_iter().collect();
+    let probe_steps = run_and_collect_steps(probe);
+    let base_pc = probe_steps[0].0;
+
+    // Program: sum = 0, i = 1, n = 5
+    //   while i <= n: sum += i; i += 1
+    //
+    // Layout:
+    //   0: MOVI r16, 0          -- sum = 0
+    //   1: MOVI r17, 1          -- i = 1
+    //   2: MOVI r18, 5          -- n = 5
+    //   3: GT r19, r17, r18     -- loop_check: r19 = (i > n)
+    //   4: JNZI r19, <9>        -- if i > n, exit loop (goto 9)
+    //   5: ADD r16, r16, r17    -- body: sum += i
+    //   6: ADDI r17, r17, 1     -- i += 1
+    //   7: JI <3>               -- goto loop_check
+    //   8: NOOP                  -- (padding, never reached)
+    //   9: LOG r16, r17, ...    -- log final values
+    //  10: RET
+
+    let exit_target = ((base_pc / 4) + 9) as u32;
+    let loop_check = ((base_pc / 4) + 3) as u32;
+
+    let bytecode: Vec<u8> = vec![
+        op::movi(0x10, 0),            // 0: sum = 0
+        op::movi(0x11, 1),            // 1: i = 1
+        op::movi(0x12, 5),            // 2: n = 5
+        op::gt(0x13, 0x11, 0x12),     // 3: r19 = (i > n)
+        op::jnzi(0x13, exit_target),  // 4: if i > n, exit
+        op::add(0x10, 0x10, 0x11),    // 5: sum += i
+        op::addi(0x11, 0x11, 1),      // 6: i += 1
+        op::ji(loop_check),           // 7: goto loop_check
+        op::noop(),                   // 8: padding
+        op::log(0x10, 0x11, 0x12, 0x00), // 9: log
+        op::ret(RegId::ONE),          // 10
+    ]
+    .into_iter()
+    .collect();
+
+    // Part 1: Verify per-iteration register values through FuelInterpreter
+    let interp = FuelInterpreter::new(bytecode.clone()).expect("interpreter creation failed");
+    let mut iteration_sums: Vec<u64> = Vec::new();
+    let mut iteration_counters: Vec<u64> = Vec::new();
+
+    // Track the ADD instruction (instruction 5) which is the "sum += i" step.
+    // The PC for instruction 5 is base_pc + 5*4 = base_pc + 20.
+    let _add_pc = base_pc + 5 * 4;
+
+    interp
+        .run_with_callback(|step: &StepState| {
+            // After the ADD at instruction 5 executes, the next step shows
+            // the updated register values. We capture when PC is at instruction 6
+            // (the ADDI i+=1), which means the ADD just completed.
+            let addi_pc = base_pc + 6 * 4;
+            if step.pc == addi_pc {
+                iteration_sums.push(step.registers[0x10]);
+                iteration_counters.push(step.registers[0x11]);
+            }
+        })
+        .expect("execution should succeed");
+
+    // After 5 iterations, sum values should be: 1, 3, 6, 10, 15
+    // (sum after adding i=1, i=2, i=3, i=4, i=5)
+    // And i values at that point should be: 1, 2, 3, 4, 5
+    // (i hasn't been incremented yet at this PC)
+    assert_eq!(
+        iteration_sums.len(),
+        5,
+        "should have 5 loop iterations, got {}",
+        iteration_sums.len()
+    );
+    assert_eq!(iteration_sums, vec![1, 3, 6, 10, 15], "sum at each iteration");
+    assert_eq!(
+        iteration_counters,
+        vec![1, 2, 3, 4, 5],
+        "counter (i) at each iteration"
+    );
+
+    // Part 2: Verify that the trace output contains all intermediate values
+    let (_dir, events) = record_and_parse(&bytecode);
+    let values = extract_int_values(&events);
+
+    // The trace should capture intermediate sum values from each iteration
+    for &expected_sum in &[1i64, 3, 6, 10, 15] {
+        assert!(
+            values.contains(&expected_sum),
+            "trace should contain intermediate sum {expected_sum}, got: {values:?}"
+        );
+    }
+
+    // Final state: sum=15, i=6 (one past n=5), counter exhausted
+    let steps = run_and_collect_steps(bytecode.clone());
+    let last = &steps[steps.len() - 1];
+    assert_eq!(last.1[0x10], 15, "final sum should be 15");
+    assert_eq!(last.1[0x11], 6, "i should be 6 after loop exits (i > n=5)");
+}
+
+/// M2 Deliverable 2: Pattern matching test (enum-like branching).
+///
+/// Simulates a match/switch on an enum discriminant:
+///   match tag {
+///       0 => result = 100,  // "None" variant
+///       1 => result = 200,  // "Some(small)" variant
+///       2 => result = 300,  // "Some(large)" variant
+///       _ => result = 999,  // default
+///   }
+///
+/// We run this for multiple input tags and verify that the correct branch
+/// is taken each time, producing different variable values in the trace.
+#[test]
+fn test_m2_pattern_matching_branches() {
+    let probe: Vec<u8> = vec![op::ret(RegId::ONE)].into_iter().collect();
+    let probe_steps = run_and_collect_steps(probe);
+    let base_pc = probe_steps[0].0;
+
+    // Helper to build the match bytecode for a given tag value.
+    // Layout:
+    //   0: MOVI r16, <tag>       -- discriminant
+    //   1: MOVI r17, 0           -- compare value: 0
+    //   2: EQ r19, r16, r17      -- tag == 0?
+    //   3: JNZI r19, <branch_0>  -- goto case_0 (instruction 10)
+    //   4: MOVI r17, 1           -- compare value: 1
+    //   5: EQ r19, r16, r17      -- tag == 1?
+    //   6: JNZI r19, <branch_1>  -- goto case_1 (instruction 11)
+    //   7: MOVI r17, 2           -- compare value: 2
+    //   8: EQ r19, r16, r17      -- tag == 2?
+    //   9: JNZI r19, <branch_2>  -- goto case_2 (instruction 12)
+    //  -- default fallthrough:
+    //  10: MOVI r18, 999         -- default result
+    //  11: JI <end>              -- goto end (instruction 15)
+    //  12: MOVI r18, 100         -- case_0: result = 100  (branch_0 target)
+    //  13: JI <end>
+    //  14: MOVI r18, 200         -- case_1: result = 200  (branch_1 target)
+    //      JI <end>              -- (15)
+    //  15: MOVI r18, 300         -- case_2: result = 300  (branch_2 target) (16)
+    //      -- fall through to end
+    //  end:
+    //  16: LOG r16, r18, ...     -- (17)
+    //  17: RET                   -- (18)
+
+    let branch_0 = ((base_pc / 4) + 12) as u32;
+    let branch_1 = ((base_pc / 4) + 14) as u32;
+    let branch_2 = ((base_pc / 4) + 16) as u32;
+    let end_target = ((base_pc / 4) + 17) as u32;
+
+    let build_match_bytecode = |tag: u32| -> Vec<u8> {
+        vec![
+            op::movi(0x10, tag),              // 0: tag
+            op::movi(0x11, 0),                // 1: cmp val 0
+            op::eq(0x13, 0x10, 0x11),         // 2: tag == 0?
+            op::jnzi(0x13, branch_0),         // 3: goto case_0
+            op::movi(0x11, 1),                // 4: cmp val 1
+            op::eq(0x13, 0x10, 0x11),         // 5: tag == 1?
+            op::jnzi(0x13, branch_1),         // 6: goto case_1
+            op::movi(0x11, 2),                // 7: cmp val 2
+            op::eq(0x13, 0x10, 0x11),         // 8: tag == 2?
+            op::jnzi(0x13, branch_2),         // 9: goto case_2
+            op::movi(0x12, 999),              // 10: default
+            op::ji(end_target),               // 11: goto end
+            op::movi(0x12, 100),              // 12: case_0
+            op::ji(end_target),               // 13: goto end
+            op::movi(0x12, 200),              // 14: case_1
+            op::ji(end_target),               // 15: goto end
+            op::movi(0x12, 300),              // 16: case_2
+            op::log(0x10, 0x12, 0x00, 0x00),  // 17: log
+            op::ret(RegId::ONE),              // 18
+        ]
+        .into_iter()
+        .collect()
+    };
+
+    // Test case: tag = 0 -> result = 100
+    {
+        let bytecode = build_match_bytecode(0);
+        let steps = run_and_collect_steps(bytecode.clone());
+        let last = &steps[steps.len() - 1];
+        assert_eq!(last.1[0x12], 100, "match tag=0: result should be 100");
+
+        let (_dir, events) = record_and_parse(&bytecode);
+        let values = extract_int_values(&events);
+        assert!(
+            values.contains(&100),
+            "trace for tag=0 should contain result 100, got: {values:?}"
+        );
+        // Verify values from other branches are NOT present
+        assert!(
+            !values.contains(&200),
+            "trace for tag=0 should NOT contain 200 (branch 1)"
+        );
+        assert!(
+            !values.contains(&300),
+            "trace for tag=0 should NOT contain 300 (branch 2)"
+        );
+        assert!(
+            !values.contains(&999),
+            "trace for tag=0 should NOT contain 999 (default)"
+        );
+    }
+
+    // Test case: tag = 1 -> result = 200
+    {
+        let bytecode = build_match_bytecode(1);
+        let steps = run_and_collect_steps(bytecode.clone());
+        let last = &steps[steps.len() - 1];
+        assert_eq!(last.1[0x12], 200, "match tag=1: result should be 200");
+
+        let (_dir, events) = record_and_parse(&bytecode);
+        let values = extract_int_values(&events);
+        assert!(
+            values.contains(&200),
+            "trace for tag=1 should contain result 200, got: {values:?}"
+        );
+        assert!(
+            !values.contains(&100),
+            "trace for tag=1 should NOT contain 100 (branch 0)"
+        );
+        assert!(
+            !values.contains(&300),
+            "trace for tag=1 should NOT contain 300 (branch 2)"
+        );
+    }
+
+    // Test case: tag = 2 -> result = 300
+    {
+        let bytecode = build_match_bytecode(2);
+        let steps = run_and_collect_steps(bytecode.clone());
+        let last = &steps[steps.len() - 1];
+        assert_eq!(last.1[0x12], 300, "match tag=2: result should be 300");
+
+        let (_dir, events) = record_and_parse(&bytecode);
+        let values = extract_int_values(&events);
+        assert!(
+            values.contains(&300),
+            "trace for tag=2 should contain result 300, got: {values:?}"
+        );
+    }
+
+    // Test case: tag = 42 (unmatched) -> result = 999 (default)
+    {
+        let bytecode = build_match_bytecode(42);
+        let steps = run_and_collect_steps(bytecode.clone());
+        let last = &steps[steps.len() - 1];
+        assert_eq!(last.1[0x12], 999, "match tag=42: result should be 999 (default)");
+
+        let (_dir, events) = record_and_parse(&bytecode);
+        let values = extract_int_values(&events);
+        assert!(
+            values.contains(&999),
+            "trace for tag=42 should contain default result 999, got: {values:?}"
+        );
+    }
+}
+
+/// M2 Deliverable 3: Struct field tracking test.
+///
+/// Simulates constructing a struct `Point { x: u64, y: u64, z: u64 }` by
+/// assigning values to consecutive registers (r16=x, r17=y, r18=z), then
+/// computing derived values (magnitude_sq = x*x + y*y + z*z).
+///
+/// Verifies that each field assignment appears as a separate value in the
+/// trace, and that the recorder tracks all "fields" independently.
+#[test]
+fn test_m2_struct_field_tracking() {
+    // Simulate: let p = Point { x: 3, y: 4, z: 5 };
+    //           let mag_sq = p.x*p.x + p.y*p.y + p.z*p.z;  // = 9+16+25 = 50
+    //           let sum = p.x + p.y + p.z;                   // = 12
+    let bytecode: Vec<u8> = vec![
+        // "Struct construction" -- consecutive register assignments
+        op::movi(0x10, 3),            // r16 = x = 3
+        op::movi(0x11, 4),            // r17 = y = 4
+        op::movi(0x12, 5),            // r18 = z = 5
+        // Compute x*x
+        op::mul(0x13, 0x10, 0x10),    // r19 = x*x = 9
+        // Compute y*y
+        op::mul(0x14, 0x11, 0x11),    // r20 = y*y = 16
+        // Compute z*z
+        op::mul(0x15, 0x12, 0x12),    // r21 = z*z = 25
+        // Compute magnitude_sq = x*x + y*y + z*z
+        op::add(0x16, 0x13, 0x14),    // r22 = x*x + y*y = 25
+        op::add(0x16, 0x16, 0x15),    // r22 = 25 + z*z = 50
+        // Compute sum = x + y + z
+        op::add(0x17, 0x10, 0x11),    // r23 = x + y = 7
+        op::add(0x17, 0x17, 0x12),    // r23 = 7 + z = 12
+        // Log the struct fields and derived values
+        op::log(0x10, 0x11, 0x12, 0x16),
+        op::ret(RegId::ONE),
+    ]
+    .into_iter()
+    .collect();
+
+    // Part 1: Verify register values through FuelInterpreter
+    let steps = run_and_collect_steps(bytecode.clone());
+    let last = &steps[steps.len() - 1];
+    let regs = &last.1;
+
+    // Struct fields
+    assert_eq!(regs[0x10], 3, "Point.x = 3");
+    assert_eq!(regs[0x11], 4, "Point.y = 4");
+    assert_eq!(regs[0x12], 5, "Point.z = 5");
+
+    // Derived values
+    assert_eq!(regs[0x13], 9, "x*x = 9");
+    assert_eq!(regs[0x14], 16, "y*y = 16");
+    assert_eq!(regs[0x15], 25, "z*z = 25");
+    assert_eq!(regs[0x16], 50, "magnitude_sq = x*x + y*y + z*z = 50");
+    assert_eq!(regs[0x17], 12, "sum = x + y + z = 12");
+
+    // Part 2: Verify the trace captures each field assignment as a separate value
+    let (_dir, events) = record_and_parse(&bytecode);
+    let values = extract_int_values(&events);
+
+    // Each struct "field" should appear individually in the trace
+    assert!(values.contains(&3), "trace should contain field x=3, got: {values:?}");
+    assert!(values.contains(&4), "trace should contain field y=4, got: {values:?}");
+    assert!(values.contains(&5), "trace should contain field z=5, got: {values:?}");
+
+    // Intermediate squared values
+    assert!(values.contains(&9), "trace should contain x*x=9, got: {values:?}");
+    assert!(values.contains(&16), "trace should contain y*y=16, got: {values:?}");
+    assert!(values.contains(&25), "trace should contain z*z=25, got: {values:?}");
+
+    // Derived aggregate values
+    assert!(values.contains(&50), "trace should contain magnitude_sq=50, got: {values:?}");
+    assert!(values.contains(&12), "trace should contain sum=12, got: {values:?}");
+
+    // Part 3: Verify variable names show that fields are tracked independently
+    let names = extract_var_names(&events);
+
+    // The variable tracker should produce meaningful names for each field.
+    // MOVI creates "imm_N" names, so we expect imm_3, imm_4, imm_5 for x, y, z.
+    assert!(
+        names.contains(&"imm_3".to_string()),
+        "should have 'imm_3' for x field, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"imm_4".to_string()),
+        "should have 'imm_4' for y field, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"imm_5".to_string()),
+        "should have 'imm_5' for z field, got: {names:?}"
+    );
+
+    // Verify that at least 3 distinct variable names exist for the struct fields,
+    // confirming they are tracked as separate values (not merged).
+    let field_names: Vec<&String> = names
+        .iter()
+        .filter(|n| *n == "imm_3" || *n == "imm_4" || *n == "imm_5")
+        .collect();
+    assert_eq!(
+        field_names.len(),
+        3,
+        "should have exactly 3 distinct struct field names, got: {field_names:?}"
+    );
+
+    // Verify step count is reasonable (12 instructions = 12-13 steps)
+    let step_count = count_steps(&events);
+    assert!(
+        step_count >= 11 && step_count <= 14,
+        "should have 11-14 step events for 12-instruction program, got {step_count}"
+    );
+}

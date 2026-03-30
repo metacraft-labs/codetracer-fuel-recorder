@@ -72,6 +72,7 @@ impl FuelInterpreter {
                 0,
                 consensus_params.gas_costs(),
                 consensus_params.fee_params(),
+                None,
             )
             .map_err(|e| eyre!("failed to finalize tx: {e:?}"))?;
 

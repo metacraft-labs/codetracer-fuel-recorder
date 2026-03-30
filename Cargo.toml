@@ -11,11 +11,11 @@ license = "Apache-2.0"
 codetracer_trace_types = "0.16"
 codetracer_trace_writer = "0.17"
 
-# FuelVM
-fuel-vm = { version = "0.58", features = ["test-helpers"] }
-fuel-tx = { version = "0.58", features = ["test-helpers"] }
-fuel-asm = "0.58"
-fuel-types = "0.58"
+# FuelVM (must match forc 0.70.x compiler output)
+fuel-vm = { version = "0.62", features = ["test-helpers"] }
+fuel-tx = { version = "0.62", features = ["test-helpers"] }
+fuel-asm = "0.62"
+fuel-types = "0.62"
 
 # HTTP client (for GraphQL replay)
 reqwest = { version = "0.12", features = ["blocking", "json"] }
@@ -32,3 +32,5 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
+gimli = "0.33"
+object = { version = "0.36", features = ["read"] }
