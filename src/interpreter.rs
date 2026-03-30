@@ -160,8 +160,30 @@ mod tests {
             .unwrap();
         // After the last step (ret), the registers should have been set.
         // r16 = 10, r17 = 32, r18 = 42, r19 = 84, r20 = 94
-        // But the last step we see might be before ret executes, so check
-        // the values at the last breakpoint.
+        assert!(
+            !final_registers.is_empty(),
+            "final_registers should be non-empty after execution"
+        );
+        assert_eq!(
+            final_registers[0x10], 10,
+            "r16 should be 10 (movi 0x10, 10)"
+        );
+        assert_eq!(
+            final_registers[0x11], 32,
+            "r17 should be 32 (movi 0x11, 32)"
+        );
+        assert_eq!(
+            final_registers[0x12], 42,
+            "r18 should be 42 (add 0x12, 0x10, 0x11 = 10 + 32)"
+        );
+        assert_eq!(
+            final_registers[0x13], 84,
+            "r19 should be 84 (muli 0x13, 0x12, 2 = 42 * 2)"
+        );
+        assert_eq!(
+            final_registers[0x14], 94,
+            "r20 should be 94 (add 0x14, 0x13, 0x10 = 84 + 10)"
+        );
     }
 
     #[test]
