@@ -111,13 +111,31 @@ fn test_fuel_source_mapping() {
         "should have at least one Step event"
     );
 
-    // Each Step event should have a valid line number (positive)
+    // Each Step event should have a valid line number within a reasonable range.
+    // The synthetic source map maps 7 instructions to lines 1-7.
+    let mut line_numbers: Vec<i64> = Vec::new();
     for step in &step_events {
         let step_data = step.get("Step").unwrap();
         let line = step_data.get("line").expect("Step should have a line field");
         let line_num = line.as_i64().expect("line should be a number");
         assert!(line_num > 0, "line number should be positive, got {line_num}");
+        assert!(line_num < 10000, "line number should be within reasonable range, got {line_num}");
+        line_numbers.push(line_num);
     }
+
+    // Line numbers should not all be the same (which would indicate broken mapping)
+    let first = line_numbers[0];
+    assert!(
+        line_numbers.iter().any(|&l| l != first),
+        "all step line numbers are {first}, source mapping appears broken"
+    );
+
+    // With our synthetic source map (instruction i -> line i+1), we expect lines
+    // in the range 1..=7 for the 7-instruction program.
+    assert!(
+        line_numbers.iter().any(|&l| l >= 1 && l <= 7),
+        "expected at least some lines in range 1..=7, got: {line_numbers:?}"
+    );
 }
 
 #[test]
@@ -208,10 +226,30 @@ fn test_fuel_trace_3file_output() {
     let metadata_content = std::fs::read_to_string(&metadata_path).unwrap();
     let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
         .expect("trace_metadata.json should be valid JSON");
-    // Metadata should have some structure (at minimum it should be an object or array)
+    // Metadata should be a JSON object with expected fields from TraceMetadata
+    assert!(metadata.is_object(), "metadata should be a JSON object");
+    let metadata_obj = metadata.as_object().unwrap();
+
+    // TraceMetadata has fields: program, args, workdir
     assert!(
-        metadata.is_object() || metadata.is_array(),
-        "metadata should be a JSON object or array"
+        metadata_obj.contains_key("program"),
+        "metadata should contain 'program' field, got keys: {:?}",
+        metadata_obj.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        metadata_obj["program"].as_str().unwrap(),
+        "test_arithmetic",
+        "metadata 'program' field should match the recorder program name"
+    );
+    assert!(
+        metadata_obj.contains_key("args"),
+        "metadata should contain 'args' field, got keys: {:?}",
+        metadata_obj.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        metadata_obj.contains_key("workdir"),
+        "metadata should contain 'workdir' field, got keys: {:?}",
+        metadata_obj.keys().collect::<Vec<_>>()
     );
 
     // Verify trace_paths.json exists and is valid JSON

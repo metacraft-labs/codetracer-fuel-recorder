@@ -844,10 +844,28 @@ fn test_trace_variable_names() {
     let (_dir, events) = record_and_parse(&bytecode);
     let names = extract_var_names(&events);
 
-    // The variable tracker should name MOVIs as "imm_N" and ADDs as "X_plus_Y"
+    // The variable tracker should name MOVIs as "imm_N" and ADDs as "X_plus_Y".
+    // We require actual meaningful names, not raw register fallbacks like "r16".
     assert!(
-        names.contains(&"imm_7".to_string()) || names.iter().any(|n| n.starts_with("r")),
-        "should have variable names for registers, got: {names:?}"
+        names.contains(&"imm_7".to_string()),
+        "should have 'imm_7' for MOVI r16,7, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"imm_13".to_string()),
+        "should have 'imm_13' for MOVI r17,13, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"imm_7_plus_imm_13".to_string()),
+        "should have 'imm_7_plus_imm_13' for ADD r18,r16,r17, got: {names:?}"
+    );
+    // Verify that the tracker produces all three expected meaningful names,
+    // not just one. Raw register names (r17, r18) may appear in early steps
+    // before those registers are written by tracked instructions -- that is
+    // expected since the recorder emits all registers r16-r23 on every step.
+    assert_eq!(
+        names.iter().filter(|n| *n == "imm_7" || *n == "imm_13" || *n == "imm_7_plus_imm_13").count(),
+        3,
+        "expected exactly 3 meaningful variable names (imm_7, imm_13, imm_7_plus_imm_13), got: {names:?}"
     );
 }
 
