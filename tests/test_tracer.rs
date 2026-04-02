@@ -305,3 +305,50 @@ fn test_fuel_single_step_trace() {
         "should have at least 1 Return event, got {return_count}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fixture export: build bytecode and export trace for WDIO tests
+// ---------------------------------------------------------------------------
+
+/// Export a trace fixture for the VS Code extension's WDIO smoke tests.
+///
+/// This test builds a FuelVM bytecode program using fuel-asm (no Sway/forc
+/// compiler required), records the trace, and writes the output to the
+/// directory specified by `SWAY_FIXTURE_OUTPUT_DIR`.
+///
+/// Run with:
+///   SWAY_FIXTURE_OUTPUT_DIR=<path> cargo test --test test_tracer -- --ignored export_fixture
+#[test]
+#[ignore]
+fn export_fixture() {
+    let output_dir = std::env::var("SWAY_FIXTURE_OUTPUT_DIR")
+        .expect("set SWAY_FIXTURE_OUTPUT_DIR to the fixture output directory");
+    let out_dir = std::path::Path::new(&output_dir);
+    std::fs::create_dir_all(out_dir).expect("failed to create fixture output directory");
+
+    let source_path = PathBuf::from("flow_test.sw");
+    let bytecode = simple_arithmetic_bytecode();
+    let num_instructions = bytecode.len() / 4;
+    let source_map = synthetic_source_map(&source_path, num_instructions);
+
+    let recorder = FuelRecorder::new("flow_test", out_dir, TraceEventsFileFormat::Json);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    // Verify the fixture was created.
+    assert!(
+        out_dir.join("trace.bin").exists(),
+        "trace.bin should exist in fixture output"
+    );
+    assert!(
+        out_dir.join("trace_metadata.json").exists(),
+        "trace_metadata.json should exist in fixture output"
+    );
+    assert!(
+        out_dir.join("trace_paths.json").exists(),
+        "trace_paths.json should exist in fixture output"
+    );
+
+    eprintln!("Fixture exported to {}", out_dir.display());
+}
