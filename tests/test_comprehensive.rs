@@ -42,8 +42,8 @@ fn record_and_parse(bytecode: &[u8]) -> (tempfile::TempDir, Vec<serde_json::Valu
         .record(bytecode.to_vec(), &source_map, &source_path)
         .expect("recording should succeed");
 
-    let content = std::fs::read_to_string(out_dir.join("trace.bin"))
-        .expect("failed to read trace.bin");
+    let content = std::fs::read_to_string(out_dir.join("trace.json"))
+        .expect("failed to read trace.json");
     let events: Vec<serde_json::Value> =
         serde_json::from_str(&content).expect("failed to parse trace JSON");
 
@@ -885,7 +885,7 @@ fn test_trace_output_completeness() {
     let out_dir = dir.path().join("traces");
 
     // Check all three files exist and are non-empty
-    for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
+    for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
         let path = out_dir.join(filename);
         assert!(path.exists(), "{filename} should exist");
         let size = std::fs::metadata(&path).unwrap().len();

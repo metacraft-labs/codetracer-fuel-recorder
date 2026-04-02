@@ -243,8 +243,8 @@ fn test_full_pipeline_with_tracker() {
         .expect("recording should succeed");
 
     // Parse the trace output
-    let trace_content = std::fs::read_to_string(out_dir.join("trace.bin"))
-        .expect("failed to read trace.bin");
+    let trace_content = std::fs::read_to_string(out_dir.join("trace.json"))
+        .expect("failed to read trace.json");
     let events: Vec<serde_json::Value> = serde_json::from_str(&trace_content)
         .expect("failed to parse trace JSON");
 
