@@ -57,7 +57,7 @@ fn run_simple_trace(format: TraceEventsFileFormat) -> tempfile::TempDir {
 /// Parse a JSON trace file and return the events as a JSON array.
 fn parse_trace_json(trace_path: &std::path::Path) -> Vec<serde_json::Value> {
     let content = std::fs::read_to_string(trace_path)
-        .expect("failed to read trace.bin");
+        .expect("failed to read trace.json");
     // The JSON format writes a single JSON array with all events
     let parsed: serde_json::Value = serde_json::from_str(&content)
         .unwrap_or_else(|e| panic!("failed to parse trace JSON: {e}"));
@@ -77,8 +77,8 @@ fn test_fuel_basic_execution() {
 
     // Assert the three trace files exist
     assert!(
-        out_dir.join("trace.bin").exists(),
-        "trace.bin should exist"
+        out_dir.join("trace.json").exists(),
+        "trace.json should exist"
     );
     assert!(
         out_dir.join("trace_metadata.json").exists(),
@@ -95,7 +95,7 @@ fn test_fuel_source_mapping() {
     let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
     let out_dir = temp_dir.path().join("traces");
 
-    let events = parse_trace_json(&out_dir.join("trace.bin"));
+    let events = parse_trace_json(&out_dir.join("trace.json"));
 
     // Find Step events
     let step_events: Vec<&serde_json::Value> = events
@@ -143,7 +143,7 @@ fn test_fuel_variable_extraction() {
     let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
     let out_dir = temp_dir.path().join("traces");
 
-    let events = parse_trace_json(&out_dir.join("trace.bin"));
+    let events = parse_trace_json(&out_dir.join("trace.json"));
 
     // Find Value events (variables)
     let value_events: Vec<&serde_json::Value> = events
@@ -214,11 +214,11 @@ fn test_fuel_trace_3file_output() {
     let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
     let out_dir = temp_dir.path().join("traces");
 
-    // Verify trace.bin exists and is non-empty
-    let trace_path = out_dir.join("trace.bin");
-    assert!(trace_path.exists(), "trace.bin should exist");
+    // Verify trace.json exists and is non-empty
+    let trace_path = out_dir.join("trace.json");
+    assert!(trace_path.exists(), "trace.json should exist");
     let trace_size = std::fs::metadata(&trace_path).unwrap().len();
-    assert!(trace_size > 0, "trace.bin should not be empty");
+    assert!(trace_size > 0, "trace.json should not be empty");
 
     // Verify trace_metadata.json exists and is valid JSON
     let metadata_path = out_dir.join("trace_metadata.json");
@@ -269,7 +269,7 @@ fn test_fuel_single_step_trace() {
     let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
     let out_dir = temp_dir.path().join("traces");
 
-    let events = parse_trace_json(&out_dir.join("trace.bin"));
+    let events = parse_trace_json(&out_dir.join("trace.json"));
 
     // Count Step events
     let step_count = events
@@ -338,8 +338,8 @@ fn export_fixture() {
 
     // Verify the fixture was created.
     assert!(
-        out_dir.join("trace.bin").exists(),
-        "trace.bin should exist in fixture output"
+        out_dir.join("trace.json").exists(),
+        "trace.json should exist in fixture output"
     );
     assert!(
         out_dir.join("trace_metadata.json").exists(),
