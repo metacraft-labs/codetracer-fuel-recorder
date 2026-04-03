@@ -103,7 +103,11 @@ impl FuelRecorder {
             source_path,
             Line(1),
         );
-        TraceWriter::register_call(&mut *writer, main_fn_id, vec![]);
+        // Merge main into <toplevel>: skip the Call event so that all steps
+        // remain at depth 0. TraceWriter::start() already opened <toplevel>.
+        // Emitting register_call here would push the body to depth 1, causing
+        // step-over from the initial position to skip the entire body.
+        let _ = main_fn_id;
 
         // Set up variable tracker
         let mut tracker = VariableTracker::new();
@@ -182,10 +186,8 @@ impl FuelRecorder {
             }
         })?;
 
-        // Emit return for main (closes the Call registered at line 106)
-        TraceWriter::register_return(&mut *writer, NONE_VALUE);
-
-        // Emit return for <toplevel> (closes the Call opened by TraceWriter::start)
+        // Close the <toplevel> call that start() opened. main was merged into
+        // <toplevel> (no Call event), so only one Return is needed.
         TraceWriter::register_return(&mut *writer, NONE_VALUE);
 
         // Finish writing
