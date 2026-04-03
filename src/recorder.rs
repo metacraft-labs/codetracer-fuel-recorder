@@ -182,7 +182,10 @@ impl FuelRecorder {
             }
         })?;
 
-        // Emit return for main
+        // Emit return for main (closes the Call registered at line 106)
+        TraceWriter::register_return(&mut *writer, NONE_VALUE);
+
+        // Emit return for <toplevel> (closes the Call opened by TraceWriter::start)
         TraceWriter::register_return(&mut *writer, NONE_VALUE);
 
         // Finish writing
