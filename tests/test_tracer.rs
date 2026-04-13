@@ -316,15 +316,27 @@ fn test_fuel_single_step_trace() {
 /// compiler required), records the trace, and writes the output to the
 /// directory specified by `SWAY_FIXTURE_OUTPUT_DIR`.
 ///
+/// When `SWAY_FIXTURE_OUTPUT_DIR` is not set, the test uses a temporary
+/// directory to verify the export logic still works.
+///
 /// Run with:
 ///   SWAY_FIXTURE_OUTPUT_DIR=<path> cargo test --test test_tracer -- --ignored export_fixture
 #[test]
 #[ignore]
 fn export_fixture() {
-    let output_dir = std::env::var("SWAY_FIXTURE_OUTPUT_DIR")
-        .expect("set SWAY_FIXTURE_OUTPUT_DIR to the fixture output directory");
-    let out_dir = std::path::Path::new(&output_dir);
-    std::fs::create_dir_all(out_dir).expect("failed to create fixture output directory");
+    let tmp_dir;
+    let out_dir = match std::env::var("SWAY_FIXTURE_OUTPUT_DIR") {
+        Ok(dir) => {
+            let p = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&p).expect("failed to create fixture output directory");
+            p
+        }
+        Err(_) => {
+            tmp_dir = tempfile::tempdir().expect("failed to create temp directory");
+            tmp_dir.path().to_path_buf()
+        }
+    };
+    let out_dir = out_dir.as_path();
 
     let source_path = PathBuf::from("flow_test.sw");
     let bytecode = simple_arithmetic_bytecode();
