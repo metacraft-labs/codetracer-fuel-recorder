@@ -115,10 +115,7 @@ pub fn start_session_query() -> GraphQLRequest {
 /// Build the GraphQL mutation for ending a debug session.
 pub fn end_session_query(session_id: &SessionId) -> GraphQLRequest {
     GraphQLRequest {
-        query: format!(
-            r#"mutation {{ endSession(id: "{}") }}"#,
-            session_id.0
-        ),
+        query: format!(r#"mutation {{ endSession(id: "{}") }}"#, session_id.0),
         variables: None,
     }
 }

@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eyre::{Context, Result, eyre};
+use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::graphql_debug::{GraphQLRequest, GraphQLResponse};
@@ -401,16 +401,28 @@ fn parse_inputs(inputs_val: Option<&serde_json::Value>) -> Vec<TransactionInput>
             let typename = input.get("__typename")?.as_str()?;
             match typename {
                 "InputCoin" => Some(TransactionInput::InputCoin {
-                    utxo_id: input.get("utxoId").and_then(|v| v.as_str()).map(String::from),
-                    owner: input.get("owner").and_then(|v| v.as_str()).map(String::from),
-                    amount: input.get("amount").and_then(|v| v.as_str()).map(String::from),
+                    utxo_id: input
+                        .get("utxoId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    owner: input
+                        .get("owner")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    amount: input
+                        .get("amount")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     asset_id: input
                         .get("assetId")
                         .and_then(|v| v.as_str())
                         .map(String::from),
                 }),
                 "InputContract" => Some(TransactionInput::InputContract {
-                    utxo_id: input.get("utxoId").and_then(|v| v.as_str()).map(String::from),
+                    utxo_id: input
+                        .get("utxoId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     contract_id: input
                         .get("contractId")
                         .and_then(|v| v.as_str())
@@ -426,7 +438,10 @@ fn parse_inputs(inputs_val: Option<&serde_json::Value>) -> Vec<TransactionInput>
                         .get("recipient")
                         .and_then(|v| v.as_str())
                         .map(String::from),
-                    amount: input.get("amount").and_then(|v| v.as_str()).map(String::from),
+                    amount: input
+                        .get("amount")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     data: input.get("data").and_then(|v| v.as_str()).map(String::from),
                 }),
                 _ => None,
@@ -451,7 +466,10 @@ fn parse_outputs(outputs_val: Option<&serde_json::Value>) -> Vec<TransactionOutp
             match typename {
                 "CoinOutput" => TransactionOutput::CoinOutput {
                     to: output.get("to").and_then(|v| v.as_str()).map(String::from),
-                    amount: output.get("amount").and_then(|v| v.as_str()).map(String::from),
+                    amount: output
+                        .get("amount")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     asset_id: output
                         .get("assetId")
                         .and_then(|v| v.as_str())
@@ -465,7 +483,10 @@ fn parse_outputs(outputs_val: Option<&serde_json::Value>) -> Vec<TransactionOutp
                 },
                 "ChangeOutput" => TransactionOutput::ChangeOutput {
                     to: output.get("to").and_then(|v| v.as_str()).map(String::from),
-                    amount: output.get("amount").and_then(|v| v.as_str()).map(String::from),
+                    amount: output
+                        .get("amount")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     asset_id: output
                         .get("assetId")
                         .and_then(|v| v.as_str())
@@ -473,7 +494,10 @@ fn parse_outputs(outputs_val: Option<&serde_json::Value>) -> Vec<TransactionOutp
                 },
                 "VariableOutput" => TransactionOutput::VariableOutput {
                     to: output.get("to").and_then(|v| v.as_str()).map(String::from),
-                    amount: output.get("amount").and_then(|v| v.as_str()).map(String::from),
+                    amount: output
+                        .get("amount")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     asset_id: output
                         .get("assetId")
                         .and_then(|v| v.as_str())
@@ -806,10 +830,7 @@ pub fn replay_transaction(config: &ReplayConfig) -> Result<ReplaySummary> {
         .fetch_transaction(&config.tx_id)
         .with_context(|| format!("failed to fetch transaction {}", config.tx_id))?;
 
-    let block_height = tx_data
-        .status
-        .as_ref()
-        .and_then(|s| s.block_height);
+    let block_height = tx_data.status.as_ref().and_then(|s| s.block_height);
 
     eprintln!(
         "Transaction found: {} inputs, {} outputs, {} receipts",
@@ -901,7 +922,10 @@ pub fn replay_transaction(config: &ReplayConfig) -> Result<ReplaySummary> {
         contract_ids: contract_ids.clone(),
         contracts_with_bytecode: contracts.len(),
         has_source_maps,
-        dry_run_receipts: dry_run_result.as_ref().map(|r| r.receipts.len()).unwrap_or(0),
+        dry_run_receipts: dry_run_result
+            .as_ref()
+            .map(|r| r.receipts.len())
+            .unwrap_or(0),
         historical_execution: config.historical_execution,
         source_available: has_source_maps,
     };
