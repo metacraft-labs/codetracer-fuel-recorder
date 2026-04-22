@@ -15,7 +15,7 @@ use fuel_asm::{op, RegId};
 use codetracer_fuel_recorder::interpreter::{FuelInterpreter, StepState};
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 // =========================================================================
 // Helpers

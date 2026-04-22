@@ -9,7 +9,7 @@ use fuel_asm::{op, RegId};
 
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 /// Build the simple arithmetic test bytecode:
 ///   r16 = 10, r17 = 32, r18 = r16 + r17 = 42,
