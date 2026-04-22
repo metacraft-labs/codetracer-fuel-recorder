@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use codetracer_trace_types::{Line, TypeKind, ValueRecord, NONE_VALUE};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::{TraceEventsFileFormat, create_trace_writer};
+use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
 use eyre::{Context, Result};
 
 use crate::abi_decoder::AbiSchema;
@@ -76,7 +76,9 @@ impl FuelRecorder {
         // the format from the file extension (.json → JSON, .bin → Binary).
         let events_filename = match self.format {
             TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Binary | TraceEventsFileFormat::BinaryV0 | TraceEventsFileFormat::Ctfs => "trace.bin",
+            TraceEventsFileFormat::Binary
+            | TraceEventsFileFormat::BinaryV0
+            | TraceEventsFileFormat::Ctfs => "trace.bin",
         };
         let events_path = self.trace_dir.join(events_filename);
         let metadata_path = self.trace_dir.join("trace_metadata.json");
@@ -97,12 +99,8 @@ impl FuelRecorder {
         let u64_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u64");
 
         // Register a main function
-        let main_fn_id = TraceWriter::ensure_function_id(
-            &mut *writer,
-            "main",
-            source_path,
-            Line(1),
-        );
+        let main_fn_id =
+            TraceWriter::ensure_function_id(&mut *writer, "main", source_path, Line(1));
         // Merge main into <toplevel>: skip the Call event so that all steps
         // remain at depth 0. TraceWriter::start() already opened <toplevel>.
         // Emitting register_call here would push the body to depth 1, causing
@@ -170,13 +168,14 @@ impl FuelRecorder {
 
                 // Use tracked variable name if available, otherwise fall
                 // back to the raw register name.
-                let name = if let Some(tracked) = tracked_vars.iter().find(|v| v.register == reg_idx) {
-                    tracked.name.clone()
-                } else if let Some(inferred) = tracker.get_name(reg_idx) {
-                    inferred.to_string()
-                } else {
-                    format!("r{}", reg_idx)
-                };
+                let name =
+                    if let Some(tracked) = tracked_vars.iter().find(|v| v.register == reg_idx) {
+                        tracked.name.clone()
+                    } else if let Some(inferred) = tracker.get_name(reg_idx) {
+                        inferred.to_string()
+                    } else {
+                        format!("r{}", reg_idx)
+                    };
 
                 let value = ValueRecord::Int {
                     i: reg_val as i64,
@@ -191,12 +190,9 @@ impl FuelRecorder {
         TraceWriter::register_return(&mut *writer, NONE_VALUE);
 
         // Finish writing
-        TraceWriter::finish_writing_trace_events(&mut *writer)
-            .map_err(|e| eyre::eyre!("{e}"))?;
-        TraceWriter::finish_writing_trace_metadata(&mut *writer)
-            .map_err(|e| eyre::eyre!("{e}"))?;
-        TraceWriter::finish_writing_trace_paths(&mut *writer)
-            .map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_events(&mut *writer).map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_metadata(&mut *writer).map_err(|e| eyre::eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_paths(&mut *writer).map_err(|e| eyre::eyre!("{e}"))?;
 
         Ok(())
     }

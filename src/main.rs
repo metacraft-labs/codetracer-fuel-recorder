@@ -142,10 +142,7 @@ fn main() -> Result<()> {
         Commands::Record(args) => record(args),
         Commands::Replay(args) => run_replay(args),
         Commands::Version => {
-            println!(
-                "codetracer-fuel-recorder {}",
-                env!("CARGO_PKG_VERSION")
-            );
+            println!("codetracer-fuel-recorder {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
     }
@@ -177,9 +174,9 @@ fn record(args: RecordArgs) -> Result<()> {
     }
 
     // Project dir mode: validate and record a Sway project
-    let project_dir_arg = args.project_dir.ok_or_else(|| {
-        eyre::eyre!("either PROJECT_DIR or --bytecode must be provided")
-    })?;
+    let project_dir_arg = args
+        .project_dir
+        .ok_or_else(|| eyre::eyre!("either PROJECT_DIR or --bytecode must be provided"))?;
 
     let project_dir = project_dir_arg
         .canonicalize()
@@ -230,11 +227,8 @@ fn record(args: RecordArgs) -> Result<()> {
     });
 
     let paths_path = out_dir.join("trace_paths.json");
-    std::fs::write(
-        &paths_path,
-        serde_json::to_string_pretty(&paths).unwrap(),
-    )
-    .with_context(|| format!("failed to write {}", paths_path.display()))?;
+    std::fs::write(&paths_path, serde_json::to_string_pretty(&paths).unwrap())
+        .with_context(|| format!("failed to write {}", paths_path.display()))?;
 
     eprintln!("Trace output written to {}", out_dir.display());
     eprintln!("  trace_metadata.json");
@@ -302,10 +296,7 @@ fn run_replay(args: ReplayArgs) -> Result<()> {
         eprintln!("  Block height: {}", height);
     }
     eprintln!("  Contracts: {}", summary.contract_ids.len());
-    eprintln!(
-        "  Bytecode fetched: {}",
-        summary.contracts_with_bytecode
-    );
+    eprintln!("  Bytecode fetched: {}", summary.contracts_with_bytecode);
     eprintln!("  Source maps: {}", summary.has_source_maps);
     eprintln!("  Dry run receipts: {}", summary.dry_run_receipts);
 

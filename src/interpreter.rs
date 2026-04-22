@@ -3,7 +3,7 @@
 //! Wraps fuel-vm's `Interpreter` to provide single-step execution with
 //! trace event collection via a callback.
 
-use eyre::{Result, eyre};
+use eyre::{eyre, Result};
 use fuel_asm::{Instruction, RawInstruction, RegId};
 use fuel_tx::{ConsensusParameters, Receipt, TransactionBuilder};
 use fuel_vm::interpreter::{Interpreter, Memory, NotSupportedEcal};
@@ -85,9 +85,7 @@ impl FuelInterpreter {
 
         loop {
             match state {
-                ProgramState::Return(_)
-                | ProgramState::ReturnData(_)
-                | ProgramState::Revert(_) => {
+                ProgramState::Return(_) | ProgramState::ReturnData(_) | ProgramState::Revert(_) => {
                     break;
                 }
                 ProgramState::RunProgram(debug_eval) => {

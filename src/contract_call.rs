@@ -296,13 +296,13 @@ mod tests {
         Receipt::call(
             from,
             to,
-            0,                   // amount
-            AssetId::zeroed(),   // asset_id
-            1_000_000,           // gas
-            0,                   // param1
-            0,                   // param2
-            0,                   // pc
-            0,                   // is
+            0,                 // amount
+            AssetId::zeroed(), // asset_id
+            1_000_000,         // gas
+            0,                 // param1
+            0,                 // param2
+            0,                 // pc
+            0,                 // is
         )
     }
 
@@ -318,7 +318,10 @@ mod tests {
     fn test_initial_state() {
         let tracker = ContractCallTracker::new();
         assert_eq!(tracker.call_depth(), 1);
-        assert_eq!(tracker.current_execution_context(), ExecutionContext::Script);
+        assert_eq!(
+            tracker.current_execution_context(),
+            ExecutionContext::Script
+        );
         assert_eq!(tracker.current_contract_id(), &ContractId::zeroed());
         assert!(!tracker.is_predicate());
     }
@@ -367,7 +370,10 @@ mod tests {
         assert_eq!(switches.len(), 1);
         assert_eq!(tracker.call_depth(), 1);
         assert_eq!(tracker.current_contract_id(), &ContractId::zeroed());
-        assert_eq!(tracker.current_execution_context(), ExecutionContext::Script);
+        assert_eq!(
+            tracker.current_execution_context(),
+            ExecutionContext::Script
+        );
     }
 
     #[test]
@@ -430,7 +436,10 @@ mod tests {
 
         tracker.exit_predicate();
         assert!(!tracker.is_predicate());
-        assert_eq!(tracker.current_execution_context(), ExecutionContext::Script);
+        assert_eq!(
+            tracker.current_execution_context(),
+            ExecutionContext::Script
+        );
     }
 
     #[test]
@@ -444,11 +453,7 @@ mod tests {
             (1, PathBuf::from("contract_a.sw"), 20),
         ];
         let source_map_a = SwaySourceMap::from_line_mapping(entries);
-        tracker.register_source_map(
-            contract_a,
-            source_map_a,
-            PathBuf::from("contract_a.sw"),
-        );
+        tracker.register_source_map(contract_a, source_map_a, PathBuf::from("contract_a.sw"));
 
         // Default source map for the script
         let default_entries = vec![

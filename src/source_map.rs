@@ -46,9 +46,7 @@ mod tests {
 
     #[test]
     fn test_lookup_missing_entry() {
-        let map = SwaySourceMap::from_line_mapping(vec![
-            (0, PathBuf::from("main.sw"), 1),
-        ]);
+        let map = SwaySourceMap::from_line_mapping(vec![(0, PathBuf::from("main.sw"), 1)]);
         assert!(map.lookup(99).is_none());
     }
 }
