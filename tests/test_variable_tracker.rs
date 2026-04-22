@@ -237,7 +237,7 @@ fn test_full_pipeline_with_tracker() {
     }"#;
 
     let abi = AbiSchema::from_json(abi_json).unwrap();
-    let recorder = FuelRecorder::with_abi("test_tracker", &out_dir, TraceEventsFileFormat::Json, abi);
+    let recorder = FuelRecorder::with_abi("test_tracker", &out_dir, TraceEventsFileFormat::Binary, abi);
     recorder
         .record(bytecode, &source_map, &source_path)
         .expect("recording should succeed");

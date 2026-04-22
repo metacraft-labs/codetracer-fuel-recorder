@@ -37,7 +37,7 @@ fn record_and_parse(bytecode: &[u8]) -> (tempfile::TempDir, Vec<serde_json::Valu
     let num_instructions = bytecode.len() / 4;
     let source_map = synthetic_source_map(&source_path, num_instructions);
 
-    let recorder = FuelRecorder::new("comprehensive_test", &out_dir, TraceEventsFileFormat::Json);
+    let recorder = FuelRecorder::new("comprehensive_test", &out_dir, TraceEventsFileFormat::Binary);
     recorder
         .record(bytecode.to_vec(), &source_map, &source_path)
         .expect("recording should succeed");
@@ -905,7 +905,7 @@ fn test_trace_output_completeness() {
     let out_dir = dir.path().join("traces");
 
     // Check all three files exist and are non-empty
-    for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
+    for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
         let path = out_dir.join(filename);
         assert!(path.exists(), "{filename} should exist");
         let size = std::fs::metadata(&path).unwrap().len();

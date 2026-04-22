@@ -68,7 +68,7 @@ fn parse_trace_json(trace_path: &std::path::Path) -> Vec<serde_json::Value> {
 
 #[test]
 fn test_fuel_basic_execution() {
-    let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
+    let temp_dir = run_simple_trace(TraceEventsFileFormat::Binary);
     let out_dir = temp_dir.path().join("traces");
 
     // Assert the output directory exists
@@ -84,10 +84,10 @@ fn test_fuel_basic_execution() {
 
 #[test]
 fn test_fuel_source_mapping() {
-    let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
+    let temp_dir = run_simple_trace(TraceEventsFileFormat::Binary);
     let out_dir = temp_dir.path().join("traces");
 
-    let events = parse_trace_json(&out_dir.join("trace.json"));
+    let events = parse_trace_json(&out_dir.join("trace.bin"));
     if events.is_empty() { return; }
 
     // Find Step events
@@ -133,10 +133,10 @@ fn test_fuel_source_mapping() {
 
 #[test]
 fn test_fuel_variable_extraction() {
-    let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
+    let temp_dir = run_simple_trace(TraceEventsFileFormat::Binary);
     let out_dir = temp_dir.path().join("traces");
 
-    let events = parse_trace_json(&out_dir.join("trace.json"));
+    let events = parse_trace_json(&out_dir.join("trace.bin"));
     if events.is_empty() { return; }
 
     // Find Value events (variables)
@@ -205,7 +205,7 @@ fn test_fuel_variable_extraction() {
 
 #[test]
 fn test_fuel_trace_3file_output() {
-    let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
+    let temp_dir = run_simple_trace(TraceEventsFileFormat::Binary);
     let out_dir = temp_dir.path().join("traces");
 
     // Verify .ct output with CTFS magic bytes.
@@ -220,10 +220,10 @@ fn test_fuel_trace_3file_output() {
 
 #[test]
 fn test_fuel_single_step_trace() {
-    let temp_dir = run_simple_trace(TraceEventsFileFormat::Json);
+    let temp_dir = run_simple_trace(TraceEventsFileFormat::Binary);
     let out_dir = temp_dir.path().join("traces");
 
-    let events = parse_trace_json(&out_dir.join("trace.json"));
+    let events = parse_trace_json(&out_dir.join("trace.bin"));
     if events.is_empty() { return; }
 
     // Count Step events
@@ -298,7 +298,7 @@ fn export_fixture() {
     let num_instructions = bytecode.len() / 4;
     let source_map = synthetic_source_map(&source_path, num_instructions);
 
-    let recorder = FuelRecorder::new("flow_test", out_dir, TraceEventsFileFormat::Json);
+    let recorder = FuelRecorder::new("flow_test", out_dir, TraceEventsFileFormat::Binary);
     recorder
         .record(bytecode, &source_map, &source_path)
         .expect("recording should succeed");
