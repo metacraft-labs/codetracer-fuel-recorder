@@ -19,7 +19,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use eyre::{Context, Result};
 
 use codetracer_fuel_recorder::abi_decoder::AbiSchema;
