@@ -5,10 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
-use codetracer_trace_types::{Line, TypeKind, ValueRecord, NONE_VALUE};
+use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord, NONE_VALUE};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
 use eyre::{Context, Result};
+use fuel_tx::Receipt;
 
 use crate::abi_decoder::AbiSchema;
 use crate::contract_call::ContractCallTracker;
@@ -120,6 +121,13 @@ impl FuelRecorder {
         let interp = FuelInterpreter::new(bytecode)?;
 
         let mut prev_line: Option<u32> = None;
+        // Index of the first receipt that has not yet been mirrored as a
+        // structured `register_special_event` record.  The contract-call
+        // tracker maintains its own counter for Call/Return detection; we
+        // need a parallel one to route every other receipt kind (Log,
+        // LogData, Mint, Burn, Transfer, TransferOut, MessageOut, Panic,
+        // Revert, ScriptResult) into the canonical event stream.
+        let mut prev_receipt_count: usize = 0;
 
         interp.run_with_callback(|step| {
             // Calculate the opcode index from PC (each instruction is 4 bytes)
@@ -147,6 +155,22 @@ impl FuelRecorder {
                     }
                 }
             }
+
+            // Route every other new receipt into the structured event
+            // stream via `register_special_event`.  The Call / Return /
+            // ReturnData receipts are already covered by the
+            // `ContractCallTracker` switch handling above; everything else
+            // is mirrored here so that the FuelVM-level effects (LOG opcode
+            // output, asset Mint/Burn/Transfer, cross-chain MessageOut,
+            // Panic / Revert traps, final ScriptResult) survive into the
+            // CodeTracer event log.  Mirrors the EVM-recorder LOG-opcode
+            // routing (1.39), the Cairo StarknetEvent routing (1.50) and
+            // the Flow Cadence resource-lifecycle routing (1.52).
+            let new_receipts = &step.receipts[prev_receipt_count..];
+            for receipt in new_receipts {
+                emit_receipt_special_event(&mut *writer, receipt);
+            }
+            prev_receipt_count = step.receipts.len();
 
             // Look up source location using contract-aware tracker
             let (lookup_path, line) =
@@ -196,5 +220,187 @@ impl FuelRecorder {
         writer.close().map_err(|e| eyre::eyre!("{e}"))?;
 
         Ok(())
+    }
+}
+
+/// Map a FuelVM `Receipt` into a single canonical
+/// `register_special_event` record.
+///
+/// The receipt enum is the FuelVM equivalent of EVM logs / Cairo Starknet
+/// events / Cadence resource events: it carries every observable side-effect
+/// of script and contract execution.  Each variant is routed onto the
+/// CodeTracer event stream:
+///
+/// - **`Log` / `LogData`** — the FuelVM `LOG` and `LOGD` opcodes.  Routed
+///   through [`EventLogKind::EvmEvent`] so the multi-stream IO writer
+///   surfaces them in the structured-event channel rather than mixing them
+///   with stdout `Write` records.  Mirrors the EVM 1.39 LOG-opcode routing
+///   and the Cairo 1.50 `StarknetEvent` routing.
+///
+/// - **`Mint` / `Burn`** — native asset supply changes.  Routed through
+///   [`EventLogKind::EvmEvent`] (asset accounting is a structured chain
+///   effect, not script-side stdout).
+///
+/// - **`Transfer` / `TransferOut`** — value transfers between contracts and
+///   to off-chain addresses.  Routed through [`EventLogKind::EvmEvent`].
+///
+/// - **`MessageOut`** — cross-chain message emitted to layer-1.  Routed
+///   through [`EventLogKind::EvmEvent`].
+///
+/// - **`Panic` / `Revert`** — script execution traps.  Routed through
+///   [`EventLogKind::Error`] so the frontend's error channel surfaces them
+///   as failures.  Mirror of the Cairo 1.50 `CairoPanic` and Cardano 1.48
+///   `AikenUplcEvalError` routing.
+///
+/// - **`ScriptResult`** — final execution outcome.  Routed through
+///   [`EventLogKind::TraceLogEvent`] (informational; Success cases should
+///   not appear in the error channel).
+///
+/// `Call` / `Return` / `ReturnData` are intentionally NOT mirrored here —
+/// they are already covered by the [`ContractCallTracker::process_receipts`]
+/// path which emits canonical `register_call` / `register_return` records.
+fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
+    match receipt {
+        // Already handled as register_call / register_return.
+        Receipt::Call { .. } | Receipt::Return { .. } | Receipt::ReturnData { .. } => {}
+
+        Receipt::Log { id, ra, rb, rc, rd, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!("FuelLog:{}", truncate_id(&format!("{id:#x}"))),
+                &format!("ra={ra} rb={rb} rc={rc} rd={rd} pc={pc:#x}"),
+            );
+        }
+
+        Receipt::LogData { id, ra, rb, len, digest, pc, data, .. } => {
+            // Inline up to 64 bytes of payload as hex; fall back to digest
+            // if the FuelVM did not preserve the data buffer.  Keeping the
+            // payload short bounds the .ct container size for log-heavy
+            // traces.
+            let payload = match data {
+                Some(bytes) if !bytes.is_empty() => {
+                    let n = bytes.len().min(64);
+                    let hex: String =
+                        bytes[..n].iter().map(|b| format!("{b:02x}")).collect();
+                    if bytes.len() > n {
+                        format!("data=0x{hex}... ({} bytes)", bytes.len())
+                    } else {
+                        format!("data=0x{hex}")
+                    }
+                }
+                _ => format!("digest={digest:#x}"),
+            };
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!("FuelLogData:{}", truncate_id(&format!("{id:#x}"))),
+                &format!("ra={ra} rb={rb} len={len} pc={pc:#x} {payload}"),
+            );
+        }
+
+        Receipt::Mint { sub_id, contract_id, val, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!("FuelMint:{}", truncate_id(&format!("{contract_id:#x}"))),
+                &format!("sub_id={sub_id:#x} val={val} pc={pc:#x}"),
+            );
+        }
+
+        Receipt::Burn { sub_id, contract_id, val, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!("FuelBurn:{}", truncate_id(&format!("{contract_id:#x}"))),
+                &format!("sub_id={sub_id:#x} val={val} pc={pc:#x}"),
+            );
+        }
+
+        Receipt::Transfer { id, to, amount, asset_id, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!("FuelTransfer:{}", truncate_id(&format!("{id:#x}"))),
+                &format!(
+                    "to={} amount={amount} asset_id={asset_id:#x} pc={pc:#x}",
+                    truncate_id(&format!("{to:#x}"))
+                ),
+            );
+        }
+
+        Receipt::TransferOut { id, to, amount, asset_id, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!("FuelTransferOut:{}", truncate_id(&format!("{id:#x}"))),
+                &format!(
+                    "to={} amount={amount} asset_id={asset_id:#x} pc={pc:#x}",
+                    truncate_id(&format!("{to:#x}"))
+                ),
+            );
+        }
+
+        Receipt::MessageOut { sender, recipient, amount, nonce, len, digest, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                &format!(
+                    "FuelMessageOut:{}",
+                    truncate_id(&format!("{sender:#x}"))
+                ),
+                &format!(
+                    "recipient={} amount={amount} nonce={nonce:#x} len={len} digest={digest:#x}",
+                    truncate_id(&format!("{recipient:#x}"))
+                ),
+            );
+        }
+
+        Receipt::Panic { id, reason, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::Error,
+                "FuelPanic",
+                &format!(
+                    "contract={} reason={reason:?} pc={pc:#x}",
+                    truncate_id(&format!("{id:#x}"))
+                ),
+            );
+        }
+
+        Receipt::Revert { id, ra, pc, .. } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::Error,
+                "FuelRevert",
+                &format!(
+                    "contract={} code={ra} pc={pc:#x}",
+                    truncate_id(&format!("{id:#x}"))
+                ),
+            );
+        }
+
+        Receipt::ScriptResult { result, gas_used } => {
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::TraceLogEvent,
+                "FuelScriptResult",
+                &format!("result={result:?} gas_used={gas_used}"),
+            );
+        }
+    }
+}
+
+/// Truncate a long hex-formatted identifier (`0x…`) to the leading 10 chars
+/// + `…` so the `metadata` slot of a `register_special_event` record stays
+/// short.
+///
+/// Mirrors the `truncate_contract_id` helper used elsewhere in the
+/// recorder for switch-event display names.
+fn truncate_id(hex: &str) -> String {
+    if hex.len() > 10 {
+        format!("{}...", &hex[..10])
+    } else {
+        hex.to_string()
     }
 }

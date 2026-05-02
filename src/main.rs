@@ -9,12 +9,17 @@
 //! ```text
 //! codetracer-fuel-recorder record <PROJECT_DIR> \
 //!     -o <output-dir> \
-//!     [-f binary|json]
+//!     [-f ctfs|binary|json]
 //!
 //! codetracer-fuel-recorder record --bytecode <FILE.bin> \
 //!     -o <output-dir> \
-//!     [-f binary|json]
+//!     [-f ctfs|binary|json]
 //! ```
+//!
+//! The default `--format` is `ctfs`, the canonical CodeTracer multi-stream
+//! container that the Nim `ct_reader_*` FFI and the db-backend's
+//! `CTFSTraceReader` consume directly.  Older trace consumers can opt into
+//! the legacy CBOR+Zstd `binary` or human-readable `json` formats.
 
 use std::path::PathBuf;
 
@@ -63,10 +68,44 @@ enum Commands {
     Version,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+/// Output format for the produced trace.
+///
+/// The default is [`OutputFormat::Ctfs`] — the canonical CodeTracer
+/// multi-stream container documented in `codetracer-trace-format-spec/`.
+/// `Binary` is the legacy CBOR+Zstd format kept for backward compatibility
+/// (single `events.bin` blob) and `Json` is a human-readable variant used
+/// during recorder-side debugging.
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
+    /// Canonical CodeTracer multi-stream container (recommended).
+    Ctfs,
+    /// Legacy CBOR + Zstd binary format.
     Binary,
+    /// Human-readable JSON (slower; useful for debugging).
     Json,
+}
+
+impl From<OutputFormat> for TraceEventsFileFormat {
+    fn from(fmt: OutputFormat) -> Self {
+        match fmt {
+            OutputFormat::Ctfs => TraceEventsFileFormat::Ctfs,
+            OutputFormat::Binary => TraceEventsFileFormat::Binary,
+            OutputFormat::Json => TraceEventsFileFormat::Json,
+        }
+    }
+}
+
+impl OutputFormat {
+    /// Stable lowercase identifier mirroring the `clap::ValueEnum`
+    /// representation; used for the placeholder `trace_metadata.json`
+    /// `format` field.
+    fn as_str(self) -> &'static str {
+        match self {
+            OutputFormat::Ctfs => "ctfs",
+            OutputFormat::Binary => "binary",
+            OutputFormat::Json => "json",
+        }
+    }
 }
 
 #[derive(Debug, clap::Args)]
@@ -86,7 +125,11 @@ struct RecordArgs {
     out_dir: PathBuf,
 
     /// Output format for the trace.
-    #[arg(short = 'f', long = "format", default_value = "binary")]
+    ///
+    /// Defaults to `ctfs` — the canonical multi-stream container.  Pass
+    /// `binary` for the legacy CBOR+Zstd format or `json` for a
+    /// human-readable variant.
+    #[arg(short = 'f', long = "format", default_value = "ctfs")]
     format: OutputFormat,
 
     /// Path to a Sway ABI JSON file for variable name enrichment.
@@ -154,10 +197,7 @@ fn main() -> Result<()> {
 
 /// Execute the `record` subcommand.
 fn record(args: RecordArgs) -> Result<()> {
-    let format = match args.format {
-        OutputFormat::Binary => TraceEventsFileFormat::Binary,
-        OutputFormat::Json => TraceEventsFileFormat::Json,
-    };
+    let format: TraceEventsFileFormat = args.format.into();
 
     // Load ABI if provided
     let abi = if let Some(abi_path) = &args.abi {
@@ -207,10 +247,7 @@ fn record(args: RecordArgs) -> Result<()> {
     let metadata = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "recorder": "codetracer-fuel-recorder",
-        "format": match args.format {
-            OutputFormat::Binary => "binary",
-            OutputFormat::Json => "json",
-        },
+        "format": args.format.as_str(),
         "status": "placeholder"
     });
 
