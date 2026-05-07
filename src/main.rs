@@ -7,24 +7,29 @@
 //! # Usage
 //!
 //! ```text
-//! codetracer-fuel-recorder record <PROJECT_DIR> \
-//!     -o <output-dir> \
-//!     [-f ctfs|binary|json]
+//! codetracer-fuel-recorder record <PROJECT_DIR> --out-dir <output-dir>
 //!
-//! codetracer-fuel-recorder record --bytecode <FILE.bin> \
-//!     -o <output-dir> \
-//!     [-f ctfs|binary|json]
+//! codetracer-fuel-recorder record --bytecode <FILE.bin> --out-dir <output-dir>
 //! ```
 //!
-//! The default `--format` is `ctfs`, the canonical CodeTracer multi-stream
-//! container that the Nim `ct_reader_*` FFI and the db-backend's
-//! `CTFSTraceReader` consume directly.  Older trace consumers can opt into
-//! the legacy CBOR+Zstd `binary` or human-readable `json` formats.
+//! The recorder always writes traces in the canonical CodeTracer multi-stream
+//! CTFS format (see `Recorder-CLI-Conventions.md` §4 in `codetracer-specs`).
+//! No `--format` flag is exposed: human-readable conversion is handled
+//! out-of-band by `ct print` (shipped with `codetracer-trace-format-nim`).
+//!
+//! # Environment variables
+//!
+//! * `CODETRACER_FUEL_RECORDER_OUT_DIR` — fallback for `--out-dir` when the
+//!   flag is not given. The CLI flag always wins.
+//! * `CODETRACER_FUEL_RECORDER_DISABLED` — set to `1` or `true` to skip
+//!   recording entirely. The recorder still validates inputs (where
+//!   applicable) but emits no trace artefacts.
+//! * `CODETRACER_FUEL_RECORDER_LOG_LEVEL` — recorder log verbosity (advisory;
+//!   the Fuel recorder currently logs to stderr unconditionally).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 
 use codetracer_fuel_recorder::abi_decoder::AbiSchema;
@@ -33,15 +38,47 @@ use codetracer_fuel_recorder::replay::{self, ReplayConfig};
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Environment variable used as a fallback for `--out-dir` when the CLI
+/// flag is omitted.  Convention: see `Recorder-CLI-Conventions.md` §5.
+const ENV_OUT_DIR: &str = "CODETRACER_FUEL_RECORDER_OUT_DIR";
+
+/// Environment variable that, when set to `1`/`true`, disables tracing
+/// entirely — the recorder runs as a transparent pass-through.
+const ENV_DISABLED: &str = "CODETRACER_FUEL_RECORDER_DISABLED";
+
+/// Default output directory used when neither `--out-dir` nor
+/// `CODETRACER_FUEL_RECORDER_OUT_DIR` is set.
+const DEFAULT_OUT_DIR: &str = "./ct-traces/";
+
+// ---------------------------------------------------------------------------
 // CLI definition
 // ---------------------------------------------------------------------------
 
 /// CodeTracer Fuel recorder -- record Sway/FuelVM execution traces.
+///
+/// Traces are always written in the canonical CTFS multi-stream format.
+/// To convert a recorded `.ct` bundle to JSON / text for inspection, use
+/// `ct print` from `codetracer-trace-format-nim`.
 #[derive(Debug, Parser)]
 #[command(
     name = "codetracer-fuel-recorder",
     version,
-    about = "Record Sway smart-contract execution traces for CodeTracer"
+    about = "Record Sway smart-contract execution traces for CodeTracer (CTFS-only). \
+             Use `ct print` from codetracer-trace-format-nim for human-readable conversion.",
+    long_about = "Record Sway/FuelVM execution traces for CodeTracer.\n\
+                  \n\
+                  Output is always written in the canonical CodeTracer CTFS\n\
+                  multi-stream format. Use `ct print` (shipped with the\n\
+                  codetracer-trace-format-nim sibling) to convert a recorded\n\
+                  `.ct` bundle to JSON or other human-readable forms.\n\
+                  \n\
+                  Environment variables:\n\
+                    CODETRACER_FUEL_RECORDER_OUT_DIR    fallback for --out-dir\n\
+                    CODETRACER_FUEL_RECORDER_DISABLED   set to 1/true to skip recording\n\
+                    CODETRACER_FUEL_RECORDER_LOG_LEVEL  log verbosity (advisory)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -68,46 +105,6 @@ enum Commands {
     Version,
 }
 
-/// Output format for the produced trace.
-///
-/// The default is [`OutputFormat::Ctfs`] — the canonical CodeTracer
-/// multi-stream container documented in `codetracer-trace-format-spec/`.
-/// `Binary` is the legacy CBOR+Zstd format kept for backward compatibility
-/// (single `events.bin` blob) and `Json` is a human-readable variant used
-/// during recorder-side debugging.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum OutputFormat {
-    /// Canonical CodeTracer multi-stream container (recommended).
-    Ctfs,
-    /// Legacy CBOR + Zstd binary format.
-    Binary,
-    /// Human-readable JSON (slower; useful for debugging).
-    Json,
-}
-
-impl From<OutputFormat> for TraceEventsFileFormat {
-    fn from(fmt: OutputFormat) -> Self {
-        match fmt {
-            OutputFormat::Ctfs => TraceEventsFileFormat::Ctfs,
-            OutputFormat::Binary => TraceEventsFileFormat::Binary,
-            OutputFormat::Json => TraceEventsFileFormat::Json,
-        }
-    }
-}
-
-impl OutputFormat {
-    /// Stable lowercase identifier mirroring the `clap::ValueEnum`
-    /// representation; used for the placeholder `trace_metadata.json`
-    /// `format` field.
-    fn as_str(self) -> &'static str {
-        match self {
-            OutputFormat::Ctfs => "ctfs",
-            OutputFormat::Binary => "binary",
-            OutputFormat::Json => "json",
-        }
-    }
-}
-
 #[derive(Debug, clap::Args)]
 struct RecordArgs {
     /// Path to the Sway project directory (must contain Forc.toml).
@@ -120,17 +117,11 @@ struct RecordArgs {
 
     /// Directory where the trace files will be written.
     ///
-    /// The directory will be created if it does not exist.
-    #[arg(short = 'o', long = "out-dir", default_value = "./ct-traces/")]
-    out_dir: PathBuf,
-
-    /// Output format for the trace.
-    ///
-    /// Defaults to `ctfs` — the canonical multi-stream container.  Pass
-    /// `binary` for the legacy CBOR+Zstd format or `json` for a
-    /// human-readable variant.
-    #[arg(short = 'f', long = "format", default_value = "ctfs")]
-    format: OutputFormat,
+    /// The directory will be created if it does not exist.  Falls back to
+    /// the `CODETRACER_FUEL_RECORDER_OUT_DIR` environment variable when the
+    /// flag is omitted.
+    #[arg(short = 'o', long = "out-dir")]
+    out_dir: Option<PathBuf>,
 
     /// Path to a Sway ABI JSON file for variable name enrichment.
     #[arg(long = "abi")]
@@ -165,14 +156,49 @@ struct ReplayArgs {
     source_dir: Option<PathBuf>,
 
     /// Directory where the replay output will be written.
-    #[arg(short = 'o', long = "out-dir", default_value = "./ct-traces/")]
-    out_dir: PathBuf,
+    ///
+    /// Falls back to `CODETRACER_FUEL_RECORDER_OUT_DIR` when omitted.
+    #[arg(short = 'o', long = "out-dir")]
+    out_dir: Option<PathBuf>,
 
     /// Enable historical execution (state rewind) for replay at the
     /// original block height. Requires fuel-core running with
     /// --historical-execution flag.
     #[arg(long = "historical-execution")]
     historical_execution: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective output directory:
+///   1. `--out-dir` if given on the CLI.
+///   2. `CODETRACER_FUEL_RECORDER_OUT_DIR` env var.
+///   3. `DEFAULT_OUT_DIR` ("./ct-traces/").
+fn resolve_out_dir(cli_out_dir: Option<PathBuf>) -> PathBuf {
+    if let Some(path) = cli_out_dir {
+        return path;
+    }
+    if let Some(value) = std::env::var_os(ENV_OUT_DIR)
+        && !value.is_empty()
+    {
+        return PathBuf::from(value);
+    }
+    PathBuf::from(DEFAULT_OUT_DIR)
+}
+
+/// Whether the recorder is disabled via env var.  When true, the CLI
+/// must execute its target operation in pass-through mode without
+/// emitting any trace artefacts.
+fn recording_disabled() -> bool {
+    match std::env::var(ENV_DISABLED) {
+        Ok(value) => {
+            let v = value.trim();
+            v == "1" || v.eq_ignore_ascii_case("true")
+        }
+        Err(_) => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +223,15 @@ fn main() -> Result<()> {
 
 /// Execute the `record` subcommand.
 fn record(args: RecordArgs) -> Result<()> {
-    let format: TraceEventsFileFormat = args.format.into();
+    if recording_disabled() {
+        // Pass-through: the Fuel recorder doesn't run a separate target
+        // process — it executes the Sway project / bytecode itself — so
+        // disabling recording simply means "don't emit any trace artefacts".
+        eprintln!("{ENV_DISABLED} is set; skipping trace recording (no output written).");
+        return Ok(());
+    }
+
+    let out_dir = resolve_out_dir(args.out_dir);
 
     // Load ABI if provided
     let abi = if let Some(abi_path) = &args.abi {
@@ -210,7 +244,7 @@ fn record(args: RecordArgs) -> Result<()> {
 
     if let Some(bytecode_path) = &args.bytecode {
         // Bytecode mode: read raw bytecode from .bin file
-        return record_bytecode(bytecode_path, &args.out_dir, format, abi);
+        return record_bytecode(bytecode_path, &out_dir, abi);
     }
 
     // Project dir mode: validate and record a Sway project
@@ -240,14 +274,13 @@ fn record(args: RecordArgs) -> Result<()> {
     eprintln!("Recording not yet implemented for Sway projects (use --bytecode for raw bytecode)");
 
     // Create output directory and write placeholder files (backwards compat)
-    let out_dir = &args.out_dir;
-    std::fs::create_dir_all(out_dir)
+    std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
     let metadata = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "recorder": "codetracer-fuel-recorder",
-        "format": args.format.as_str(),
+        "format": "ctfs",
         "status": "placeholder"
     });
 
@@ -275,12 +308,7 @@ fn record(args: RecordArgs) -> Result<()> {
 }
 
 /// Record a trace from raw FuelVM bytecode.
-fn record_bytecode(
-    bytecode_path: &PathBuf,
-    out_dir: &PathBuf,
-    format: TraceEventsFileFormat,
-    abi: Option<AbiSchema>,
-) -> Result<()> {
+fn record_bytecode(bytecode_path: &Path, out_dir: &Path, abi: Option<AbiSchema>) -> Result<()> {
     let bytecode = std::fs::read(bytecode_path)
         .with_context(|| format!("failed to read bytecode file: {}", bytecode_path.display()))?;
 
@@ -300,9 +328,9 @@ fn record_bytecode(
     let source_map = SwaySourceMap::from_line_mapping(entries);
 
     let recorder = if let Some(abi) = abi {
-        FuelRecorder::with_abi(program_name, out_dir, format, abi)
+        FuelRecorder::with_abi(program_name, out_dir, abi)
     } else {
-        FuelRecorder::new(program_name, out_dir, format)
+        FuelRecorder::new(program_name, out_dir)
     };
     recorder.record(bytecode, &source_map, &source_path)?;
 
@@ -316,11 +344,18 @@ fn record_bytecode(
 
 /// Execute the `replay` subcommand.
 fn run_replay(args: ReplayArgs) -> Result<()> {
+    if recording_disabled() {
+        eprintln!("{ENV_DISABLED} is set; skipping replay (no output written).");
+        return Ok(());
+    }
+
+    let out_dir = resolve_out_dir(args.out_dir);
+
     let config = ReplayConfig {
         rpc_url: args.rpc_url,
         tx_id: args.tx_id,
         source_dir: args.source_dir,
-        output_dir: args.out_dir,
+        output_dir: out_dir,
         historical_execution: args.historical_execution,
     };
 
