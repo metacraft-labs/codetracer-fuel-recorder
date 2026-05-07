@@ -15,7 +15,6 @@ use fuel_asm::{op, RegId};
 use codetracer_fuel_recorder::interpreter::{FuelInterpreter, StepState};
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 // =========================================================================
 // Helpers
@@ -37,7 +36,7 @@ fn record_and_parse(bytecode: &[u8]) -> (tempfile::TempDir, Vec<serde_json::Valu
     let num_instructions = bytecode.len() / 4;
     let source_map = synthetic_source_map(&source_path, num_instructions);
 
-    let recorder = FuelRecorder::new("comprehensive_test", &out_dir, TraceEventsFileFormat::Binary);
+    let recorder = FuelRecorder::new("comprehensive_test", &out_dir);
     recorder
         .record(bytecode.to_vec(), &source_map, &source_path)
         .expect("recording should succeed");

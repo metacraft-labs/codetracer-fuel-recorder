@@ -9,7 +9,6 @@ use codetracer_fuel_recorder::interpreter::StepState;
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
 use codetracer_fuel_recorder::variable_tracker::VariableTracker;
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 /// Build a StepState for a single instruction with given registers.
 fn make_step(instruction: fuel_asm::Instruction, registers: &[u64; 64], pc: u64) -> StepState {
@@ -237,7 +236,7 @@ fn test_full_pipeline_with_tracker() {
     }"#;
 
     let abi = AbiSchema::from_json(abi_json).unwrap();
-    let recorder = FuelRecorder::with_abi("test_tracker", &out_dir, TraceEventsFileFormat::Binary, abi);
+    let recorder = FuelRecorder::with_abi("test_tracker", &out_dir, abi);
     recorder
         .record(bytecode, &source_map, &source_path)
         .expect("recording should succeed");

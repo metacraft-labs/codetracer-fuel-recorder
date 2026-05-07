@@ -19,39 +19,37 @@ use crate::variable_tracker::VariableTracker;
 
 /// The main recorder that processes FuelVM execution events into CodeTracer
 /// trace format.
+///
+/// The recorder is hard-pinned to the canonical CodeTracer multi-stream
+/// CTFS container — see `Recorder-CLI-Conventions.md` §4 in
+/// `codetracer-specs`.  Human-readable conversion is delegated to
+/// `ct print` (shipped with `codetracer-trace-format-nim`).
 pub struct FuelRecorder {
     /// Name of the program being recorded.
     pub program_name: String,
     /// Output directory for trace files.
     pub trace_dir: PathBuf,
-    /// Output format.
-    pub format: TraceEventsFileFormat,
     /// Optional ABI schema for variable name enrichment.
     pub abi: Option<AbiSchema>,
 }
 
 impl FuelRecorder {
-    /// Create a new FuelRecorder.
-    pub fn new(program_name: &str, trace_dir: &Path, format: TraceEventsFileFormat) -> Self {
+    /// Create a new FuelRecorder.  The writer is always CTFS; there is no
+    /// legacy-format escape hatch.
+    pub fn new(program_name: &str, trace_dir: &Path) -> Self {
         Self {
             program_name: program_name.to_string(),
             trace_dir: trace_dir.to_path_buf(),
-            format,
             abi: None,
         }
     }
 
-    /// Create a new FuelRecorder with ABI information for variable enrichment.
-    pub fn with_abi(
-        program_name: &str,
-        trace_dir: &Path,
-        format: TraceEventsFileFormat,
-        abi: AbiSchema,
-    ) -> Self {
+    /// Create a new FuelRecorder with ABI information for variable
+    /// enrichment.  The writer is always CTFS.
+    pub fn with_abi(program_name: &str, trace_dir: &Path, abi: AbiSchema) -> Self {
         Self {
             program_name: program_name.to_string(),
             trace_dir: trace_dir.to_path_buf(),
-            format,
             abi: Some(abi),
         }
     }
@@ -59,29 +57,24 @@ impl FuelRecorder {
     /// Record a FuelVM execution trace.
     ///
     /// Takes bytecode and an optional source map, executes the bytecode with
-    /// single-stepping, and writes CodeTracer trace files.
+    /// single-stepping, and writes a CodeTracer CTFS trace bundle.
     pub fn record(
         &self,
         bytecode: Vec<u8>,
         source_map: &SwaySourceMap,
         source_path: &Path,
     ) -> Result<()> {
-        // Create trace writer
-        let mut writer = create_trace_writer(&self.program_name, &[], self.format);
+        // Create trace writer (CTFS only — convention §4).
+        let mut writer = create_trace_writer(&self.program_name, &[], TraceEventsFileFormat::Ctfs);
 
         // Create output directory
         std::fs::create_dir_all(&self.trace_dir)
             .with_context(|| format!("cannot create output dir: {}", self.trace_dir.display()))?;
 
-        // Use the correct filename extension so that db-backend can infer
-        // the format from the file extension (.json → JSON, .bin → Binary).
-        let events_filename = match self.format {
-            TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Binary
-            | TraceEventsFileFormat::BinaryV0
-            | TraceEventsFileFormat::Ctfs => "trace.bin",
-        };
-        let events_path = self.trace_dir.join(events_filename);
+        // CTFS multi-stream container — `db-backend` infers the format
+        // from the `.bin` extension.  No JSON / legacy-binary alternative
+        // is exposed.
+        let events_path = self.trace_dir.join("trace.bin");
         let metadata_path = self.trace_dir.join("trace_metadata.json");
         let paths_path = self.trace_dir.join("trace_paths.json");
 
