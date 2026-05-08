@@ -207,21 +207,35 @@ fn test_fuel_single_step_trace() {
 // ===========================================================================
 
 /// Record the simple-arithmetic bytecode, then convert the produced `.ct`
-/// container to JSON via `ct-print --json` and assert on the textual
-/// representation.
+/// container to JSON via `ct-print` and assert on:
+///
+/// 1. **Structural anchors** (legacy layer): `ct-print --json` output
+///    contains the source filename / variable names somewhere in the
+///    textual rendering.
+/// 2. **Exact decoded values** (the layer enabled by `ct-print --full`):
+///    the synthetic arithmetic bytecode runs
+///    `r16=10, r17=32, r18=r16+r17=42, r19=r18*2=84, r20=r19+r16=94`,
+///    log r20, ret.  The variable-tracker infers `imm_<value>` names
+///    from MOVI immediates and synthesises composite names for the
+///    derived registers.  Each assignment must surface in the trace as
+///    a step event with a decoded `Int` ValueRecord whose `i` field
+///    matches the literal value the FuelVM computes.
 ///
 /// Pre-2026-05-08 the recorder shipped a `--format json` mode and this
 /// suite asserted on a recorder-emitted `trace.json` file.  The
 /// convention now mandates CTFS-only output; `ct print` is the
 /// canonical conversion tool.  See `Recorder-CLI-Conventions.md` §4.
+/// `ct-print --full` (added 2026-05 in `codetracer-trace-format-nim`)
+/// is what enables the exact-value layer — its output is a
+/// deterministic JSON document with every CBOR `ValueRecord` decoded
+/// to a structured form like `{"kind":"Int","i":42,"type_id":1}`.
 ///
-/// The Fuel recorder's variable payload (general-purpose register
-/// values encoded as `ValueRecord::Int { i, type_id }`) does not
-/// round-trip through `ct print --json` today (same pre-existing
-/// limitation as cardano / circom / flow), so this test asserts on
-/// **structural anchors** — the source-path file name and at least one
-/// of the inferred register / immediate variable names — rather than
-/// on integer values.
+/// History note: until the 2026-05 ct-print --full upgrade, this test
+/// only asserted on structural anchors (filename + at least one
+/// register name) because ValueRecord::Int didn't round-trip through
+/// `ct-print --json` for fuel.  --full now decodes the CBOR payload
+/// directly and the assertions below pin every register's exact
+/// integer value at the step where the FuelVM writes it.
 #[test]
 fn test_recorded_trace_via_ct_print_json() {
     let ct_print = ct_print_path();
@@ -243,7 +257,11 @@ fn test_recorded_trace_via_ct_print_json() {
         out_dir
     );
 
-    // ct-print --json <file.ct>
+    // -----------------------------------------------------------------
+    // Layer 1 (legacy): ct-print --json — substring presence checks.
+    // Kept as a safety net so a regression in the textual rendering
+    // is caught even if --full's JSON shape evolves.
+    // -----------------------------------------------------------------
     let output = Command::new(&ct_print)
         .args(["--json"])
         .arg(&ct_files[0])
@@ -252,7 +270,7 @@ fn test_recorded_trace_via_ct_print_json() {
 
     assert!(
         output.status.success(),
-        "ct-print should succeed; stderr: {}",
+        "ct-print --json should succeed; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -279,6 +297,162 @@ fn test_recorded_trace_via_ct_print_json() {
         "ct-print --json output should mention at least one of the \
          recorder's variable names (imm_10/imm_32/r16..r20); got:\n{stdout}"
     );
+
+    // -----------------------------------------------------------------
+    // Layer 2 (the upgrade): ct-print --full — exact decoded values.
+    // -----------------------------------------------------------------
+    let full_output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("failed to run ct-print --full");
+
+    assert!(
+        full_output.status.success(),
+        "ct-print --full should succeed; stderr: {}",
+        String::from_utf8_lossy(&full_output.stderr)
+    );
+
+    let doc: serde_json::Value = serde_json::from_slice(&full_output.stdout)
+        .expect("ct-print --full should emit valid JSON");
+
+    // ----- Function table: `main` must appear -------------------------
+    // The fuel recorder synthesises a single `main` function for the
+    // simple-arithmetic bytecode (no Sway-level call graph reaches the
+    // recorder for raw fuel-asm input).  If a future change introduces
+    // sub-functions for this fixture, extend the assertion rather than
+    // weakening it.
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        functions.iter().any(|f| f.ends_with("main")),
+        "expected `main` in functions table; got {:?}",
+        functions
+    );
+
+    // ----- Path table: the synthetic fixture path must appear ---------
+    let paths: Vec<&str> = doc["paths"]
+        .as_array()
+        .expect("paths array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("test_arithmetic.sw")),
+        "expected test_arithmetic.sw in paths table; got {:?}",
+        paths
+    );
+
+    // ----- Step / call counts ----------------------------------------
+    // The simple-arithmetic bytecode has 7 instructions; the recorder
+    // emits one initial absolute step plus one delta step per executed
+    // instruction (the LOG and RET tail steps are still recorded as
+    // step events even though their effect is non-arithmetic), for a
+    // total of 8 step events.  No `call_entry` events are emitted by
+    // the synthetic-bytecode recorder path (there is no Sway call graph
+    // surfacing through fuel-asm input — the recorder just walks linear
+    // bytecode).  These are stable properties of the canonical fixture
+    // — if they change, that's a real regression to investigate, not a
+    // flake.
+    let counts = &doc["counts"];
+    assert_eq!(
+        counts["steps"].as_u64(),
+        Some(8),
+        "expected 8 step events for simple_arithmetic_bytecode; counts={counts}",
+    );
+    assert_eq!(
+        counts["calls"].as_u64(),
+        Some(0),
+        "expected 0 call events (synthetic fuel-asm bytecode has no call graph); counts={counts}",
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+
+    // ----- Call sequence: empty for the synthetic bytecode ------------
+    // Asserted explicitly so that if the recorder ever starts emitting
+    // call_entry events for this fixture, the test fails loudly rather
+    // than silently passing.
+    let call_sequence: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert!(
+        call_sequence.is_empty(),
+        "expected no call_entry events for synthetic fuel-asm bytecode; got {:?}",
+        call_sequence
+    );
+
+    // ----- Exact decoded variable values ------------------------------
+    // Collect every (varname, i64) pair surfaced by step events.  These
+    // come from the recorder writing `ValueRecord::Int` CBOR blobs, then
+    // ct-print --full decoding them back to `{"kind":"Int","i":<n>,...}`.
+    let observed_vars: Vec<(String, i64)> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| {
+            e["vars"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+        })
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            let value = &v["value"];
+            // The fuel recorder encodes general-purpose register values
+            // as ValueRecord::Int.  If something else surfaces (e.g. a
+            // BigInt for a wider FuelVM word, or a Raw byte payload for
+            // memory-backed values), fail loudly so the test author can
+            // decide whether to extend the assertions or accept the new
+            // variant.
+            assert_eq!(
+                value["kind"].as_str(),
+                Some("Int"),
+                "variable `{}` should decode as Int, got {}; \
+                 if a new ValueRecord variant has landed for fuel registers, \
+                 extend this test to assert on it explicitly rather than \
+                 weakening the check",
+                name,
+                value
+            );
+            let i = value["i"]
+                .as_i64()
+                .unwrap_or_else(|| panic!("Int.i must be i64 for `{name}`; got {value}"));
+            Some((name, i))
+        })
+        .collect();
+
+    // The simple-arithmetic bytecode writes:
+    //   r16 = 10                             (varname: imm_10)
+    //   r17 = 32                             (varname: imm_32)
+    //   r18 = r16 + r17 = 42                 (varname: imm_10_plus_imm_32)
+    //   r19 = r18 * 2  = 84                  (varname: imm_10_plus_imm_32_times_2)
+    //   r20 = r19 + r16 = 94                 (varname: imm_10_plus_imm_32_times_2_plus_imm_10)
+    // The variable-tracker infers these composite names by chaining the
+    // immediate-derived names of the source registers.  Each must
+    // surface as an `Int` step variable with the exact integer value
+    // the FuelVM computes at least once across the recorded trace.
+    let expected: &[(&str, i64)] = &[
+        ("imm_10", 10),
+        ("imm_32", 32),
+        ("imm_10_plus_imm_32", 42),
+        ("imm_10_plus_imm_32_times_2", 84),
+        ("imm_10_plus_imm_32_times_2_plus_imm_10", 94),
+    ];
+    for (name, value) in expected {
+        assert!(
+            observed_vars
+                .iter()
+                .any(|(n, v)| n == name && v == value),
+            "expected step variable `{name}` = {value} in --full output; \
+             observed = {observed_vars:?}"
+        );
+    }
 }
 
 // ===========================================================================
