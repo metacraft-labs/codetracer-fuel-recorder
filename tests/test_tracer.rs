@@ -967,23 +967,27 @@ fn test_nested_calls_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    // RECORDER BUG: spec wants {main, outer, middle, inner} (the
-    // bytecode simulates a 3-deep call chain via the source map line
-    // ranges).  Today the recorder synthesises a single `main` for
-    // raw fuel-asm input and never emits register_call events because
-    // it only ingests contract-level Call receipts (none surface for
-    // pure script execution).  See the parallel
-    // `test_nested_calls_test_emits_call_chain` below for the
-    // spec-compliant expectation.
-    assert_eq!(functions, vec!["main"]);
+    // The recorder synthesises three in-program subroutines for raw
+    // fuel-asm input whose source map carves the bytecode into
+    // wide-gap line clusters: each cluster of consecutive lines
+    // (gaps <= NESTED_CALL_LINE_GAP_THRESHOLD) becomes one
+    // synthesised function in encounter order — outer, middle, inner.
+    // The leading `main` is the merged-into-`<toplevel>` entry record
+    // registered by `FuelRecorder::record`.  See the parallel
+    // `test_nested_calls_test_emits_call_chain` regression pin and
+    // `recorder.rs::synthetic_call_name` for the naming convention.
+    assert_eq!(functions, vec!["main", "outer", "middle", "inner"]);
 
     let counts = &doc["counts"];
     // 9 step events: initial AbsoluteStep at line 10 + 8 transitions
     // for L10, L11, L12, L20, L21, L30, L31, L32.
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
-    // RECORDER BUG: spec wants 3 calls (outer/middle/inner) and 3
-    // matching exits.  Today: 0.
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    // 3 synthesised in-program calls: outer (L10..L12), middle
+    // (L20..L21), inner (L30..L31) — one per cluster of
+    // consecutive source lines with a gap > NESTED_CALL_LINE_GAP_THRESHOLD
+    // separating it from the previous cluster.  See
+    // `test_nested_calls_test_emits_call_chain` for the regression pin.
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -991,8 +995,8 @@ fn test_nested_calls_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 9 steps + 1 io = 10 events.
-    assert_eq!(events.len(), 10, "events.len()");
+    // 9 steps + 3 call_entry + 3 call_exit + 1 io = 16 events.
+    assert_eq!(events.len(), 16, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Step-line order pins the simulated call structure ----------
@@ -1060,11 +1064,6 @@ fn test_nested_calls_test_via_ct_print_full() {
 }
 
 #[test]
-#[ignore = "RECORDER BUG: raw fuel-asm bytecode never produces \
-            register_call events (the recorder only emits them for \
-            contract-to-contract Call receipts).  Spec-compliant output \
-            should expose three call_entry events for the simulated \
-            outer -> middle -> inner chain."]
 fn test_nested_calls_test_emits_call_chain() {
     let ct_print = match ct_print_or_skip("test_nested_calls_test_emits_call_chain") {
         Some(p) => p,
@@ -1182,14 +1181,13 @@ fn test_collections_test_via_ct_print_full() {
         "step lines must walk L1..L8 in order"
     );
 
-    // ----- Variable kinds: every step variable decodes as Int ---------
-    // RECORDER BUG: a spec-compliant trace would expose the heap-backed
-    // byte buffer as a `ValueRecord::Sequence` (or similar) at the LOGD
-    // step, with the four bytes the program wrote.  Today the recorder
-    // only knows how to emit `ValueRecord::Int` for the eight
-    // general-purpose registers r16..r23; the heap buffer never enters
-    // the trace except as the io_event payload below.  See the parallel
-    // `test_collections_test_value_kinds_present` below.
+    // ----- Variable kinds: registers decode as Int + LOGD payload as Sequence
+    // The recorder emits per-register Int values on every step, plus
+    // a synthesised `logd_payload` Sequence ValueRecord on the step
+    // where a LOGD receipt surfaces (the L7 LOGD here).  This pins
+    // both surfaces: any drift that drops the Sequence (regression of
+    // the collections fix) or grows the set with another variant
+    // (e.g. Tuple / Struct support landing) fails this test.
     let kinds: std::collections::BTreeSet<String> = events
         .iter()
         .filter(|e| e["kind"] == "step")
@@ -1198,13 +1196,13 @@ fn test_collections_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         kinds,
-        ["Int".to_string()]
+        ["Int".to_string(), "Sequence".to_string()]
             .iter()
             .cloned()
             .collect::<std::collections::BTreeSet<String>>(),
-        "today the only ValueRecord variant the fuel recorder emits \
-         from raw bytecode is Int — extend this set when Sequence / \
-         Tuple / Struct support lands"
+        "fuel recorder emits Int per register plus a Sequence \
+         `logd_payload` on the LOGD step — extend this set when \
+         further ValueRecord variants (Tuple / Struct) land"
     );
 
     // ----- io_event payload preserves the buffer ----------------------
@@ -1228,12 +1226,6 @@ fn test_collections_test_via_ct_print_full() {
 }
 
 #[test]
-#[ignore = "RECORDER BUG: heap-allocated byte buffers (the only \
-            structured value surface raw fuel-asm bytecode has) are \
-            not encoded as ValueRecord::Sequence / Tuple / Struct.  \
-            Spec-compliant output should surface the LOGD payload as \
-            a Sequence ValueRecord with one Int per byte (or a Raw \
-            ValueRecord carrying the byte buffer)."]
 fn test_collections_test_value_kinds_present() {
     let Some(doc) = record_bytecode_and_dump_full(
         "test_collections_test_value_kinds_present",
