@@ -53,7 +53,32 @@ impl FuelInterpreter {
     ///
     /// The callback receives a `StepState` with the current execution state.
     /// Returns the total number of steps executed.
-    pub fn run_with_callback<F>(&self, mut callback: F) -> Result<usize>
+    pub fn run_with_callback<F>(&self, callback: F) -> Result<usize>
+    where
+        F: FnMut(&StepState),
+    {
+        let RunOutcome { step_count, .. } = self.run(callback)?;
+        Ok(step_count)
+    }
+
+    /// Execute the program with single-stepping, calling `callback` at each
+    /// step, and additionally return the **final** list of receipts the
+    /// FuelVM accumulated by the time it reached a terminal
+    /// `ProgramState::Return` / `ReturnData` / `Revert`.
+    ///
+    /// Terminal receipts (`Receipt::Revert`, `Receipt::Return`,
+    /// `Receipt::ReturnData`, the always-final `Receipt::ScriptResult`) are
+    /// appended by the VM **after** the last single-step breakpoint fires —
+    /// no in-loop `callback` invocation observes them.  Callers that need
+    /// to surface terminal failures (e.g. a `RVRT` revert routed through
+    /// `EventLogKind::Error`) MUST drain the trailing receipts returned
+    /// here.  Mirrors the cross-recorder convention: terminal failures
+    /// (panic / abort / throw / fail / revert) MUST surface as a
+    /// `RecordEvent::Error` io_event.
+    ///
+    /// See `tests/test_tracer.rs::test_error_paths_test_emits_revert_event`
+    /// for the regression that drove this hook.
+    pub fn run<F>(&self, mut callback: F) -> Result<RunOutcome>
     where
         F: FnMut(&StepState),
     {
@@ -112,8 +137,23 @@ impl FuelInterpreter {
             }
         }
 
-        Ok(step_count)
+        Ok(RunOutcome {
+            step_count,
+            final_receipts: vm.receipts().to_vec(),
+        })
     }
+}
+
+/// Outcome of a full run via [`FuelInterpreter::run`].
+pub struct RunOutcome {
+    /// Number of single-step callbacks that fired.
+    pub step_count: usize,
+    /// All receipts the VM accumulated, including the terminal records
+    /// (`Receipt::Revert` / `Receipt::Return` / `Receipt::ReturnData` /
+    /// `Receipt::ScriptResult`) that are appended after the last
+    /// single-step breakpoint and therefore never reach the per-step
+    /// callback.
+    pub final_receipts: Vec<Receipt>,
 }
 
 #[cfg(test)]

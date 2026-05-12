@@ -1317,31 +1317,30 @@ fn test_error_paths_test_via_ct_print_full() {
     // transitions to ProgramState::Revert).
     assert_eq!(counts["steps"].as_u64(), Some(4), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
-    // RECORDER BUG: spec wants exactly 1 error io_event (the Revert
-    // receipt routed through EventLogKind::Error).  Today: 0 — the
-    // single-step loop in `FuelInterpreter::run_with_callback`
-    // terminates as soon as `state` becomes `ProgramState::Revert`,
-    // before another callback fires that would let
-    // `emit_receipt_special_event` see the terminal `Receipt::Revert`
-    // / `Receipt::ScriptResult` entries.  See parallel
-    // `test_error_paths_test_emits_revert_event` below.
+    // Exactly 1 error io_event: the terminal `Receipt::Revert` drained
+    // after the last single-step breakpoint and routed through
+    // `EventLogKind::Error`.  The trailing `Receipt::ScriptResult` is
+    // intentionally suppressed (see recorder.rs — it would double-report
+    // the same termination).  See parallel
+    // `test_error_paths_test_emits_revert_event` below for the payload
+    // assertion.
     assert_eq!(
         counts["io_events"].as_u64(),
-        Some(0),
-        "io_events; counts={counts} (RECORDER BUG: should be 1)"
+        Some(1),
+        "io_events; counts={counts}"
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 4 steps + 0 io = 4 events.
-    assert_eq!(events.len(), 4, "events.len()");
+    // 4 steps + 1 io = 5 events.
+    assert_eq!(events.len(), 5, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
         observed_step_lines(&doc),
         vec![1, 1, 2, 3],
         "step lines must include L3 (the RVRT itself) — the instruction \
-         that triggers the revert is observed, only the terminal \
-         Receipt::Revert receipt is missing"
+         that triggers the revert is observed; the terminal \
+         Receipt::Revert is now drained as a separate io_event"
     );
 
     // ----- Pre-revert variables MUST still be surfaced ----------------
@@ -1385,13 +1384,6 @@ fn test_error_paths_test_via_ct_print_full() {
 }
 
 #[test]
-#[ignore = "RECORDER BUG: terminal Receipt::Revert / Receipt::ScriptResult \
-            never reach `emit_receipt_special_event` because \
-            FuelInterpreter::run_with_callback breaks out of the \
-            single-step loop as soon as `state` becomes \
-            ProgramState::Revert.  Spec-compliant output should emit \
-            exactly one io_event with EventLogKind::Error carrying the \
-            revert code."]
 fn test_error_paths_test_emits_revert_event() {
     let Some(doc) = record_bytecode_and_dump_full(
         "test_error_paths_test_emits_revert_event",
