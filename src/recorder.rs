@@ -122,7 +122,7 @@ impl FuelRecorder {
         // Revert, ScriptResult) into the canonical event stream.
         let mut prev_receipt_count: usize = 0;
 
-        interp.run_with_callback(|step| {
+        let outcome = interp.run(|step| {
             // Calculate the opcode index from PC (each instruction is 4 bytes)
             let opcode_index = (step.pc / 4) as usize;
 
@@ -201,6 +201,43 @@ impl FuelRecorder {
                 TraceWriter::register_variable_with_full_value(&mut *writer, &name, value);
             }
         })?;
+
+        // Drain receipts the VM appended *after* the final single-step
+        // breakpoint.  Terminal `Receipt::Revert`, `Receipt::Return`,
+        // `Receipt::ReturnData` and the always-final `Receipt::ScriptResult`
+        // live here — without this drain a reverting script would never
+        // surface a `FuelRevert` EventLogKind::Error io_event.
+        // Cross-recorder convention: terminal failures
+        // (panic / abort / throw / fail / revert) MUST surface as a
+        // `RecordEvent::Error` io_event (mirrors wasm 693d6834,
+        // move 4041840, ton 17e859c, cardano 7e5a177).
+        for receipt in &outcome.final_receipts[prev_receipt_count..] {
+            match receipt {
+                // Skip terminal `Receipt::Return` / `Receipt::ReturnData`:
+                // the script-level RET is the natural end of `<toplevel>`
+                // and the unconditional `register_return` below already
+                // closes that frame — emitting an extra `register_return`
+                // would unbalance the call stack.  Cross-contract
+                // `Receipt::Call` should also not appear at termination;
+                // defensively skip it for symmetry with the step-loop
+                // branch where it is handled by the call tracker.
+                Receipt::Call { .. } | Receipt::Return { .. } | Receipt::ReturnData { .. } => {}
+
+                // Skip `Receipt::ScriptResult`: it is a transaction-level
+                // outcome record (always present, redundant with the
+                // Return / Revert / Panic receipt that immediately
+                // precedes it).  Routing it through io_events would
+                // double-report every script termination: a successful
+                // run would gain a spurious `result=Success` io_event
+                // and — critically for the test suite — a reverting run
+                // would emit *two* error-channel io_events instead of
+                // one.  The script-side trap (Revert / Panic) already
+                // carries the failure code; ScriptResult adds nothing.
+                Receipt::ScriptResult { .. } => {}
+
+                _ => emit_receipt_special_event(&mut *writer, receipt),
+            }
+        }
 
         // Close the <toplevel> call that start() opened. main was merged into
         // <toplevel> (no Call event), so only one Return is needed.
