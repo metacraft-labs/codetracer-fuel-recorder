@@ -9,6 +9,7 @@ use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord, NONE_VAL
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
 use eyre::{Context, Result};
+use fuel_asm::Instruction;
 use fuel_tx::Receipt;
 
 use crate::abi_decoder::AbiSchema;
@@ -138,6 +139,17 @@ impl FuelRecorder {
         // regression pin.
         let logd_payload_type_id =
             TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "logd_payload");
+        // Register a Struct type for two-u64 LOGD payloads.  When a LOGD
+        // receipt surfaces a 16-byte buffer the recorder additionally
+        // emits a `logd_struct` ValueRecord::Struct with two big-endian
+        // u64 fields decoded from the buffer.  This is the first
+        // structured-value surface other than Sequence the fuel
+        // recorder exposes — gateway for ABI-driven struct decoding
+        // once forc-pkg surfaces type info.  See
+        // `tests/test_tracer.rs::test_struct_decoding_test_via_ct_print_full`
+        // for the regression pin.
+        let logd_struct_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Struct, "logd_struct");
 
         // Register a main function
         let main_fn_id =
@@ -252,6 +264,23 @@ impl FuelRecorder {
             }
             prev_receipt_count = step.receipts.len();
 
+            // Per-opcode SRW / SWW detection.  These are the FuelVM's
+            // storage-read-word / storage-write-word opcodes.  They are
+            // contract-only — when executed in script context they
+            // immediately panic with `ExpectedInternalContext`, so they
+            // never surface as a receipt.  To make storage access visible
+            // in the trace even at the point of the offending opcode,
+            // emit an io_event capturing the key register and (for SWW)
+            // the value register *before* the VM transitions to the panic
+            // state.  Mirrors the EVM-recorder SLOAD/SSTORE routing.
+            // See `tests/test_tracer.rs::
+            //  test_storage_block_test_via_ct_print_full` and
+            // `test_storage_map_test_via_ct_print_full` for the
+            // regression pins.
+            if let Some(instr) = &step.instruction {
+                emit_storage_opcode_event(&mut *writer, instr, &step.registers);
+            }
+
             // Look up source location using contract-aware tracker
             let (lookup_path, line) =
                 call_tracker.lookup_source(opcode_index, source_map, source_path);
@@ -356,6 +385,37 @@ impl FuelRecorder {
                     "logd_payload",
                     value,
                 );
+
+                // Additionally, when the LOGD payload is exactly a
+                // multiple of 8 bytes and at least 16 bytes (= two u64
+                // fields), surface it as a `ValueRecord::Struct` whose
+                // fields are the big-endian-decoded u64 words.  This is
+                // the recorder's first structured non-Sequence variant
+                // emission — the gateway to ABI-driven struct decoding
+                // once forc-pkg surfaces type info.  Keep the byte
+                // Sequence above for raw inspection; the Struct is an
+                // additional structured surface.
+                if payload.len() >= 16 && payload.len() % 8 == 0 {
+                    let mut field_values: Vec<ValueRecord> = Vec::new();
+                    for chunk in payload.chunks_exact(8) {
+                        let word = u64::from_be_bytes(
+                            chunk.try_into().expect("chunks_exact(8) yields 8 bytes"),
+                        );
+                        field_values.push(ValueRecord::Int {
+                            i: word as i64,
+                            type_id: u64_type_id,
+                        });
+                    }
+                    let struct_value = ValueRecord::Struct {
+                        field_values,
+                        type_id: logd_struct_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "logd_struct",
+                        struct_value,
+                    );
+                }
             }
         })?;
 
@@ -602,5 +662,66 @@ fn truncate_id(hex: &str) -> String {
         format!("{}...", &hex[..10])
     } else {
         hex.to_string()
+    }
+}
+
+/// Surface FuelVM storage-access opcodes (SRW / SWW) as io_events.
+///
+/// SRW (`Storage Read Word`) and SWW (`Storage Write Word`) are
+/// contract-only opcodes — in script context they panic immediately
+/// with `ExpectedInternalContext` and therefore never produce a real
+/// state change, but the *attempt* is still useful trace content: it
+/// pins where the program tried to touch contract storage.  The
+/// recorder emits one io_event per SRW / SWW it sees, capturing the
+/// key-address register and (for SWW) the value register, mirroring
+/// the EVM-recorder SLOAD / SSTORE routing.  When forc-pkg integration
+/// lands and the recorder gets to drive real contract bytecode, this
+/// path will surface every successful storage access too, since the
+/// per-opcode emission fires regardless of whether the VM later
+/// panics or completes the access normally.
+fn emit_storage_opcode_event(
+    writer: &mut dyn TraceWriter,
+    instr: &Instruction,
+    registers: &[u64],
+) {
+    match instr {
+        Instruction::SRW(srw) => {
+            let (dst, status, key_addr) = srw.unpack();
+            let key_addr_idx = usize::from(key_addr);
+            let key_addr_val = registers.get(key_addr_idx).copied().unwrap_or(0);
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                "FuelStorageRead",
+                &format!(
+                    "opcode=SRW dst=r{} status=r{} key_addr=r{}={:#x}",
+                    usize::from(dst),
+                    usize::from(status),
+                    key_addr_idx,
+                    key_addr_val
+                ),
+            );
+        }
+        Instruction::SWW(sww) => {
+            let (key_addr, status, value) = sww.unpack();
+            let key_addr_idx = usize::from(key_addr);
+            let value_idx = usize::from(value);
+            let key_addr_val = registers.get(key_addr_idx).copied().unwrap_or(0);
+            let value_val = registers.get(value_idx).copied().unwrap_or(0);
+            TraceWriter::register_special_event(
+                writer,
+                EventLogKind::EvmEvent,
+                "FuelStorageWrite",
+                &format!(
+                    "opcode=SWW key_addr=r{}={:#x} status=r{} value=r{}={}",
+                    key_addr_idx,
+                    key_addr_val,
+                    usize::from(status),
+                    value_idx,
+                    value_val
+                ),
+            );
+        }
+        _ => {}
     }
 }
