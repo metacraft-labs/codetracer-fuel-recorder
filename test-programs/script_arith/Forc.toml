@@ -1,0 +1,7 @@
+[project]
+authors = ["test"]
+license = "Apache-2.0"
+name = "script_arith"
+entry = "main.sw"
+
+[dependencies]
