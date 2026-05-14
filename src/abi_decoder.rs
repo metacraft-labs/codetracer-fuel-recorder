@@ -73,4 +73,24 @@ impl AbiSchema {
     pub fn function_names(&self) -> Vec<&str> {
         self.functions.iter().map(|f| f.name.as_str()).collect()
     }
+
+    /// Get the output type name for a function, if defined.
+    ///
+    /// Used by the recorder to drive ABI-aware output decoders — e.g.
+    /// when `output.type` is `(u64, b256, bool)` the recorder emits a
+    /// `ValueRecord::Tuple` step variable on every LOGD step; when it
+    /// is `enum Outcome` the recorder emits a `ValueRecord::Variant`
+    /// with the discriminator + decoded inner contents.  See
+    /// `src/recorder.rs::record` for the dispatch logic and
+    /// `tests/test_tracer.rs::test_tuple_decoding_test_via_ct_print_full`
+    /// /
+    /// `tests/test_tracer.rs::test_enum_tagged_union_test_via_ct_print_full`
+    /// for the regression pins.
+    pub fn function_output_type(&self, fn_name: &str) -> Option<&str> {
+        self.functions
+            .iter()
+            .find(|f| f.name == fn_name)
+            .and_then(|f| f.output.as_ref())
+            .map(|o| o.type_name.as_str())
+    }
 }

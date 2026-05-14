@@ -52,6 +52,36 @@ fn synthetic_call_name(index: usize) -> String {
     }
 }
 
+/// Sway program shape — drives the entry-function name and a couple of
+/// shape-dependent emissions (e.g. predicates surface a final
+/// `predicate_result` `ValueRecord::Bool` step variable).
+///
+/// The recorder defaults to [`ProgramKind::Script`] (matching every
+/// pre-M10 fixture).  [`ProgramKind::Predicate`] toggles the M10
+/// predicate fixture coverage: the synthesised function table entry is
+/// renamed to `predicate`, the `enter_predicate` /
+/// `exit_predicate` pair on the existing `ContractCallTracker` is
+/// invoked at the start / end of recording, and the boolean return
+/// value the FuelVM reports through `Receipt::Return.val` is
+/// surfaced as a `ValueRecord::Bool` step variable named
+/// `predicate_result` attached to the final step.  See
+/// `tests/test_tracer.rs::test_predicate_test_via_ct_print_full`
+/// for the regression pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramKind {
+    /// Default Sway *script* shape — `<toplevel>` + `main` entry point.
+    Script,
+    /// Sway *predicate* shape — `<toplevel>` + `predicate` entry point;
+    /// surfaces `predicate_result` `ValueRecord::Bool` on the final step.
+    Predicate,
+}
+
+impl Default for ProgramKind {
+    fn default() -> Self {
+        Self::Script
+    }
+}
+
 /// The main recorder that processes FuelVM execution events into CodeTracer
 /// trace format.
 ///
@@ -66,6 +96,9 @@ pub struct FuelRecorder {
     pub trace_dir: PathBuf,
     /// Optional ABI schema for variable name enrichment.
     pub abi: Option<AbiSchema>,
+    /// Sway program shape — controls function naming and shape-dependent
+    /// emissions.  See [`ProgramKind`].
+    pub program_kind: ProgramKind,
 }
 
 impl FuelRecorder {
@@ -76,6 +109,7 @@ impl FuelRecorder {
             program_name: program_name.to_string(),
             trace_dir: trace_dir.to_path_buf(),
             abi: None,
+            program_kind: ProgramKind::Script,
         }
     }
 
@@ -86,6 +120,34 @@ impl FuelRecorder {
             program_name: program_name.to_string(),
             trace_dir: trace_dir.to_path_buf(),
             abi: Some(abi),
+            program_kind: ProgramKind::Script,
+        }
+    }
+
+    /// Create a new FuelRecorder configured for the Sway *predicate*
+    /// shape.  See [`ProgramKind::Predicate`] for the behavioural
+    /// implications.
+    pub fn with_predicate_mode(program_name: &str, trace_dir: &Path) -> Self {
+        Self {
+            program_name: program_name.to_string(),
+            trace_dir: trace_dir.to_path_buf(),
+            abi: None,
+            program_kind: ProgramKind::Predicate,
+        }
+    }
+
+    /// Create a new FuelRecorder configured for the Sway *predicate*
+    /// shape with an ABI schema attached.
+    pub fn with_predicate_mode_and_abi(
+        program_name: &str,
+        trace_dir: &Path,
+        abi: AbiSchema,
+    ) -> Self {
+        Self {
+            program_name: program_name.to_string(),
+            trace_dir: trace_dir.to_path_buf(),
+            abi: Some(abi),
+            program_kind: ProgramKind::Predicate,
         }
     }
 
@@ -150,15 +212,66 @@ impl FuelRecorder {
         // for the regression pin.
         let logd_struct_type_id =
             TraceWriter::ensure_type_id(&mut *writer, TypeKind::Struct, "logd_struct");
+        // Register a Sequence type for u64-element vectors decoded from
+        // LOGD payloads.  When a LOGD payload is a multiple of 8 bytes
+        // (>= 8 bytes), the recorder additionally emits a `vec_dynamic`
+        // `ValueRecord::Sequence` whose elements are the big-endian
+        // u64 words decoded from the buffer, with `is_slice = false`
+        // (a heap-backed dynamic vector — Sway `Vec<u64>` shape).  This
+        // sits alongside the `logd_payload` byte Sequence (which uses
+        // `is_slice = true` to mark it as a slice/view of memory rather
+        // than a heap-owned dynamic vector).  See
+        // `tests/test_tracer.rs::test_vec_dynamic_test_via_ct_print_full`
+        // for the regression pin.
+        let vec_dynamic_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "vec_dynamic");
+        // Register a Tuple type for the heterogeneous tuple decoder
+        // (Sway `(u64, b256, bool)` shape).  Driven by ABI metadata —
+        // when the ABI's `output.type` is a tuple type the recorder
+        // decodes LOGD payloads into a `ValueRecord::Tuple` with one
+        // element per tuple component.  See
+        // `tests/test_tracer.rs::test_tuple_decoding_test_via_ct_print_full`.
+        let tuple_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Tuple, "tuple_decoded");
+        // Register a Sequence type for the b256 inner element of a
+        // decoded tuple — 32 bytes surfaced as a Sequence with
+        // `is_slice = true` (a fixed-width memory slice view).
+        let tuple_b256_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "b256_slice");
+        // Register a Bool type for boolean values surfaced from tuples
+        // and predicates.
+        let bool_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Bool, "bool");
+        // Register a Variant type for tagged-union decoding (Sway
+        // `enum Outcome { ... }` shape).  Driven by ABI metadata — when
+        // the ABI's `output.type` is `enum <Name>` the recorder decodes
+        // LOGD payloads as a `ValueRecord::Variant` with the
+        // discriminator name + decoded inner contents.  See
+        // `tests/test_tracer.rs::test_enum_tagged_union_test_via_ct_print_full`.
+        let variant_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Variant, "outcome_variant");
+        // Inner-payload type IDs for the variant decoder.
+        let variant_str8_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "str8_payload");
+        let variant_unit_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Tuple, "unit_payload");
 
-        // Register a main function
-        let main_fn_id =
-            TraceWriter::ensure_function_id(&mut *writer, "main", source_path, Line(1));
-        // Merge main into <toplevel>: skip the Call event so that all steps
-        // remain at depth 0. TraceWriter::start() already opened <toplevel>.
-        // Emitting register_call here would push the body to depth 1, causing
-        // step-over from the initial position to skip the entire body.
-        let _ = main_fn_id;
+        // Register the entry-point function.  For the Sway *script* shape
+        // (the default) this is `main`; for the Sway *predicate* shape
+        // this is `predicate`.  In both cases the function is merged
+        // into `<toplevel>` (no `register_call` emission) so that all
+        // steps remain at depth 0 — see comment below.
+        let entry_fn_name = match self.program_kind {
+            ProgramKind::Script => "main",
+            ProgramKind::Predicate => "predicate",
+        };
+        let entry_fn_id =
+            TraceWriter::ensure_function_id(&mut *writer, entry_fn_name, source_path, Line(1));
+        // Merge entry into <toplevel>: skip the Call event so that all
+        // steps remain at depth 0. TraceWriter::start() already opened
+        // <toplevel>.  Emitting register_call here would push the body
+        // to depth 1, causing step-over from the initial position to
+        // skip the entire body.
+        let _ = entry_fn_id;
 
         // Set up variable tracker
         let mut tracker = VariableTracker::new();
@@ -168,6 +281,42 @@ impl FuelRecorder {
 
         // Set up contract call tracker
         let mut call_tracker = ContractCallTracker::new();
+        if self.program_kind == ProgramKind::Predicate {
+            // Use the existing M5 enter_predicate path — see
+            // `src/contract_call.rs`.  The tracker now reports
+            // `is_predicate() == true`; we balance it with an
+            // `exit_predicate` after the run completes so the call
+            // stack invariant (`current_execution_context() ==
+            // ExecutionContext::Script` at the end) is preserved.
+            call_tracker.enter_predicate();
+        }
+
+        // Detect ABI-driven structured-output decoders.  When the ABI's
+        // `main.output.type` matches a recognised shape the recorder
+        // emits an additional `ValueRecord` step variable on every LOGD
+        // step.  The two recognised shapes today are:
+        //
+        //   * `(u64, b256, bool)` — surfaces as `tuple_decoded`
+        //     `ValueRecord::Tuple` with three elements: an Int (8
+        //     big-endian bytes), a Sequence-of-32-bytes with
+        //     `is_slice = true` (the b256 slice view) and a Bool
+        //     (last byte != 0).  Total payload length: 41 bytes.
+        //   * `enum Outcome` — surfaces as `outcome_variant`
+        //     `ValueRecord::Variant` with the first byte as the
+        //     discriminator (0=Success, 1=Failure, 2=Skipped) and the
+        //     remaining bytes as the inner payload (BE u64 for
+        //     Success, 8-byte ASCII for Failure, empty for Skipped).
+        let mut emit_tuple_decoder = false;
+        let mut emit_variant_decoder = false;
+        if let Some(abi) = &self.abi {
+            if let Some(out_type) = abi.function_output_type("main") {
+                if out_type.trim() == "(u64, b256, bool)" {
+                    emit_tuple_decoder = true;
+                } else if out_type.trim() == "enum Outcome" {
+                    emit_variant_decoder = true;
+                }
+            }
+        }
 
         // Create interpreter and run with single-stepping
         let interp = FuelInterpreter::new(bytecode)?;
@@ -255,7 +404,10 @@ impl FuelRecorder {
             let new_receipts = &step.receipts[prev_receipt_count..];
             let mut step_logd_payload: Option<Vec<u8>> = None;
             for receipt in new_receipts {
-                if let Receipt::LogData { data: Some(bytes), .. } = receipt {
+                if let Receipt::LogData {
+                    data: Some(bytes), ..
+                } = receipt
+                {
                     if !bytes.is_empty() && step_logd_payload.is_none() {
                         step_logd_payload = Some(bytes.clone());
                     }
@@ -380,11 +532,7 @@ impl FuelRecorder {
                     is_slice: false,
                     type_id: logd_payload_type_id,
                 };
-                TraceWriter::register_variable_with_full_value(
-                    &mut *writer,
-                    "logd_payload",
-                    value,
-                );
+                TraceWriter::register_variable_with_full_value(&mut *writer, "logd_payload", value);
 
                 // Additionally, when the LOGD payload is exactly a
                 // multiple of 8 bytes and at least 16 bytes (= two u64
@@ -414,6 +562,146 @@ impl FuelRecorder {
                         &mut *writer,
                         "logd_struct",
                         struct_value,
+                    );
+                }
+
+                // Additionally, when the LOGD payload is a multiple of
+                // 8 bytes and at least 8 bytes (= one u64 element),
+                // surface it as a heap-backed dynamic vector via
+                // `ValueRecord::Sequence` with `is_slice = false` and
+                // one element per u64 word.  This is the canonical
+                // surface for the Sway `Vec<u64>` shape — distinguished
+                // from the byte-level `logd_payload` Sequence (which
+                // surfaces every payload as a per-byte view).  The
+                // `is_slice = false` marker differentiates the
+                // heap-owned Vec from a slice/view of memory; the
+                // existing `logd_payload` byte Sequence is also
+                // `is_slice = false` (raw bytes are themselves owned
+                // by the heap allocation the LOGD copied from).  See
+                // `tests/test_tracer.rs::test_vec_dynamic_test_via_ct_print_full`
+                // for the regression pin and the differentiation
+                // contract.
+                if payload.len() >= 8 && payload.len() % 8 == 0 {
+                    let mut elements: Vec<ValueRecord> = Vec::new();
+                    for chunk in payload.chunks_exact(8) {
+                        let word = u64::from_be_bytes(
+                            chunk.try_into().expect("chunks_exact(8) yields 8 bytes"),
+                        );
+                        elements.push(ValueRecord::Int {
+                            i: word as i64,
+                            type_id: u64_type_id,
+                        });
+                    }
+                    let value = ValueRecord::Sequence {
+                        elements,
+                        is_slice: false,
+                        type_id: vec_dynamic_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "vec_dynamic",
+                        value,
+                    );
+                }
+
+                // ABI-driven tuple decoder.  When the ABI declares the
+                // entry-point output as `(u64, b256, bool)` and the
+                // LOGD payload is exactly 41 bytes (8 + 32 + 1) the
+                // recorder emits a `tuple_decoded` `ValueRecord::Tuple`
+                // with one element per tuple component.
+                if emit_tuple_decoder && payload.len() == 41 {
+                    let u64_word =
+                        u64::from_be_bytes(payload[0..8].try_into().expect("8-byte slice"));
+                    let b256_elements: Vec<ValueRecord> = payload[8..40]
+                        .iter()
+                        .map(|b| ValueRecord::Int {
+                            i: *b as i64,
+                            type_id: u64_type_id,
+                        })
+                        .collect();
+                    let tuple_value = ValueRecord::Tuple {
+                        elements: vec![
+                            ValueRecord::Int {
+                                i: u64_word as i64,
+                                type_id: u64_type_id,
+                            },
+                            ValueRecord::Sequence {
+                                elements: b256_elements,
+                                is_slice: true,
+                                type_id: tuple_b256_type_id,
+                            },
+                            ValueRecord::Bool {
+                                b: payload[40] != 0,
+                                type_id: bool_type_id,
+                            },
+                        ],
+                        type_id: tuple_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "tuple_decoded",
+                        tuple_value,
+                    );
+                }
+
+                // ABI-driven variant decoder.  When the ABI declares
+                // the entry-point output as `enum Outcome` the recorder
+                // decodes the LOGD payload as a tagged-union value:
+                // first byte = discriminator, remaining bytes = inner
+                // payload (per-variant shape).
+                if emit_variant_decoder && !payload.is_empty() {
+                    let (variant_name, contents): (&str, ValueRecord) = match payload[0] {
+                        0 if payload.len() >= 9 => {
+                            let v =
+                                u64::from_be_bytes(payload[1..9].try_into().expect("8-byte slice"));
+                            (
+                                "Success",
+                                ValueRecord::Int {
+                                    i: v as i64,
+                                    type_id: u64_type_id,
+                                },
+                            )
+                        }
+                        1 if payload.len() >= 9 => {
+                            let bytes: Vec<ValueRecord> = payload[1..9]
+                                .iter()
+                                .map(|b| ValueRecord::Int {
+                                    i: *b as i64,
+                                    type_id: u64_type_id,
+                                })
+                                .collect();
+                            (
+                                "Failure",
+                                ValueRecord::Sequence {
+                                    elements: bytes,
+                                    is_slice: true,
+                                    type_id: variant_str8_type_id,
+                                },
+                            )
+                        }
+                        2 => (
+                            "Skipped",
+                            ValueRecord::Tuple {
+                                elements: vec![],
+                                type_id: variant_unit_type_id,
+                            },
+                        ),
+                        _ => (
+                            "Unknown",
+                            ValueRecord::None {
+                                type_id: u64_type_id,
+                            },
+                        ),
+                    };
+                    let variant_value = ValueRecord::Variant {
+                        discriminator: variant_name.to_string(),
+                        contents: Box::new(contents),
+                        type_id: variant_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "outcome_variant",
+                        variant_value,
                     );
                 }
             }
@@ -467,6 +755,35 @@ impl FuelRecorder {
         while nested_call_depth > 0 {
             TraceWriter::register_return(&mut *writer, NONE_VALUE);
             nested_call_depth -= 1;
+        }
+
+        // Predicate-mode finalisation: surface the boolean return value
+        // the FuelVM reported through `Receipt::Return.val` as a
+        // `predicate_result` `ValueRecord::Bool` step variable attached
+        // to the final step (the variable is registered before the
+        // closing `register_return`, so it flushes onto the last
+        // pending step rather than starting a new one).  The FuelVM
+        // canonical predicate-success encoding is `RET 1`; any non-zero
+        // return word maps to `Bool { b: true }`, zero (or the absence
+        // of a `Receipt::Return`) maps to `Bool { b: false }`.
+        if self.program_kind == ProgramKind::Predicate {
+            let return_val: u64 = outcome
+                .final_receipts
+                .iter()
+                .find_map(|r| match r {
+                    Receipt::Return { val, .. } => Some(*val),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let value = ValueRecord::Bool {
+                b: return_val != 0,
+                type_id: bool_type_id,
+            };
+            TraceWriter::register_variable_with_full_value(&mut *writer, "predicate_result", value);
+            // Balance the `enter_predicate` call we made above so the
+            // call_tracker invariant is preserved (script context at
+            // the very end of the recording).
+            call_tracker.exit_predicate();
         }
 
         // Close the <toplevel> call that start() opened. main was merged into
@@ -524,7 +841,15 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
         // Already handled as register_call / register_return.
         Receipt::Call { .. } | Receipt::Return { .. } | Receipt::ReturnData { .. } => {}
 
-        Receipt::Log { id, ra, rb, rc, rd, pc, .. } => {
+        Receipt::Log {
+            id,
+            ra,
+            rb,
+            rc,
+            rd,
+            pc,
+            ..
+        } => {
             TraceWriter::register_special_event(
                 writer,
                 EventLogKind::EvmEvent,
@@ -533,7 +858,16 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             );
         }
 
-        Receipt::LogData { id, ra, rb, len, digest, pc, data, .. } => {
+        Receipt::LogData {
+            id,
+            ra,
+            rb,
+            len,
+            digest,
+            pc,
+            data,
+            ..
+        } => {
             // Inline up to 64 bytes of payload as hex; fall back to digest
             // if the FuelVM did not preserve the data buffer.  Keeping the
             // payload short bounds the .ct container size for log-heavy
@@ -541,8 +875,7 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             let payload = match data {
                 Some(bytes) if !bytes.is_empty() => {
                     let n = bytes.len().min(64);
-                    let hex: String =
-                        bytes[..n].iter().map(|b| format!("{b:02x}")).collect();
+                    let hex: String = bytes[..n].iter().map(|b| format!("{b:02x}")).collect();
                     if bytes.len() > n {
                         format!("data=0x{hex}... ({} bytes)", bytes.len())
                     } else {
@@ -559,7 +892,13 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             );
         }
 
-        Receipt::Mint { sub_id, contract_id, val, pc, .. } => {
+        Receipt::Mint {
+            sub_id,
+            contract_id,
+            val,
+            pc,
+            ..
+        } => {
             TraceWriter::register_special_event(
                 writer,
                 EventLogKind::EvmEvent,
@@ -568,7 +907,13 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             );
         }
 
-        Receipt::Burn { sub_id, contract_id, val, pc, .. } => {
+        Receipt::Burn {
+            sub_id,
+            contract_id,
+            val,
+            pc,
+            ..
+        } => {
             TraceWriter::register_special_event(
                 writer,
                 EventLogKind::EvmEvent,
@@ -577,7 +922,14 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             );
         }
 
-        Receipt::Transfer { id, to, amount, asset_id, pc, .. } => {
+        Receipt::Transfer {
+            id,
+            to,
+            amount,
+            asset_id,
+            pc,
+            ..
+        } => {
             TraceWriter::register_special_event(
                 writer,
                 EventLogKind::EvmEvent,
@@ -589,7 +941,14 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             );
         }
 
-        Receipt::TransferOut { id, to, amount, asset_id, pc, .. } => {
+        Receipt::TransferOut {
+            id,
+            to,
+            amount,
+            asset_id,
+            pc,
+            ..
+        } => {
             TraceWriter::register_special_event(
                 writer,
                 EventLogKind::EvmEvent,
@@ -601,14 +960,19 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
             );
         }
 
-        Receipt::MessageOut { sender, recipient, amount, nonce, len, digest, .. } => {
+        Receipt::MessageOut {
+            sender,
+            recipient,
+            amount,
+            nonce,
+            len,
+            digest,
+            ..
+        } => {
             TraceWriter::register_special_event(
                 writer,
                 EventLogKind::EvmEvent,
-                &format!(
-                    "FuelMessageOut:{}",
-                    truncate_id(&format!("{sender:#x}"))
-                ),
+                &format!("FuelMessageOut:{}", truncate_id(&format!("{sender:#x}"))),
                 &format!(
                     "recipient={} amount={amount} nonce={nonce:#x} len={len} digest={digest:#x}",
                     truncate_id(&format!("{recipient:#x}"))
@@ -679,11 +1043,7 @@ fn truncate_id(hex: &str) -> String {
 /// path will surface every successful storage access too, since the
 /// per-opcode emission fires regardless of whether the VM later
 /// panics or completes the access normally.
-fn emit_storage_opcode_event(
-    writer: &mut dyn TraceWriter,
-    instr: &Instruction,
-    registers: &[u64],
-) {
+fn emit_storage_opcode_event(writer: &mut dyn TraceWriter, instr: &Instruction, registers: &[u64]) {
     match instr {
         Instruction::SRW(srw) => {
             let (dst, status, key_addr) = srw.unpack();
