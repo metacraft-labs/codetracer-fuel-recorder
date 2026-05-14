@@ -5,9 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord, NONE_VALUE};
+use codetracer_trace_types::{EventLogKind, Line, NONE_VALUE, TypeKind, ValueRecord};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
+use codetracer_trace_writer_nim::{TraceEventsFileFormat, create_trace_writer};
 use eyre::{Context, Result};
 use fuel_asm::Instruction;
 use fuel_tx::Receipt;
@@ -254,6 +254,53 @@ impl FuelRecorder {
             TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "str8_payload");
         let variant_unit_type_id =
             TraceWriter::ensure_type_id(&mut *writer, TypeKind::Tuple, "unit_payload");
+        // M10 Round 3 decoder type IDs.
+        //
+        // `option_decoded` / `result_decoded` — Sway std `Option<u64>` /
+        // `Result<u64, str>` shapes surface as `ValueRecord::Variant`
+        // with the canonical Sway std discriminator names (`Some` /
+        // `None` / `Ok` / `Err`).  See
+        // `tests/test_tracer.rs::test_option_result_test_via_ct_print_full`.
+        let option_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Variant, "option_decoded");
+        let result_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Variant, "result_decoded");
+        let result_err_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "result_err_str");
+        // `array_fixed` — Sway `[u64; N]` shape.  Surfaces as a
+        // `ValueRecord::Sequence` with a fixed element count derived
+        // from the ABI type (e.g. `[u64; 4]` -> 4 elements).  Note:
+        // the recorder requests `is_slice = true` to distinguish the
+        // fixed-length array from the heap-owned `vec_dynamic`
+        // Sequence (`is_slice = false`); the Rust -> Nim FFI today
+        // drops the `is_slice` flag and it always lands as `false` in
+        // the encoded CBOR (same FFI gap pinned in
+        // `test_tuple_decoding_test_via_ct_print_full` / `test_enum_tagged_union_test_via_ct_print_full`).
+        // The structural differentiation (top-level naming
+        // `array_fixed` vs `vec_dynamic`) preserves the spec-level
+        // distinction while the FFI plumbing catches up.  See
+        // `tests/test_tracer.rs::test_array_fixed_test_via_ct_print_full`.
+        let array_fixed_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "array_fixed");
+        // `integer_widths` — Sway `(u8, u16, u32, u64)` shape.
+        // Surfaces as a `ValueRecord::Tuple` with four `ValueRecord::Int`
+        // elements; each element carries its width-specific `type_id`
+        // (`u8` / `u16` / `u32` / `u64`).  Width tagging is preserved
+        // structurally (one type per width) — the underlying FFI uses
+        // i64 for every `Int` value, so the *value* width is not
+        // intrinsically tagged, but the per-element `type_id` makes
+        // the width visible to downstream tooling that resolves
+        // `type_id` -> name.  See
+        // `tests/test_tracer.rs::test_integer_widths_test_via_ct_print_full`
+        // for the regression pin and the documented limitation.
+        let integer_widths_tuple_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Tuple, "integer_widths_tuple");
+        let u8_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u8");
+        let u16_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u16");
+        let u32_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u32");
+        // `match_pattern_test` reuses the existing variant decoder; no
+        // additional type_id is needed beyond `outcome_variant` /
+        // `variant_str8_type_id` / `variant_unit_type_id` above.
 
         // Register the entry-point function.  For the Sway *script* shape
         // (the default) this is `main`; for the Sway *predicate* shape
@@ -308,12 +355,52 @@ impl FuelRecorder {
         //     Success, 8-byte ASCII for Failure, empty for Skipped).
         let mut emit_tuple_decoder = false;
         let mut emit_variant_decoder = false;
+        // M10 Round 3 decoders.  Each is keyed off the ABI's
+        // `main.output.type` string so that adding a new shape never
+        // disturbs an existing fixture's emission contract:
+        //
+        //   * `enum Option<u64>`     -> `option_decoded` Variant
+        //                               (Some(u64) / None)
+        //   * `enum Result<u64, str>`-> `result_decoded` Variant
+        //                               (Ok(u64) / Err(str[8]))
+        //   * `[u64; 4]`             -> `array_fixed` Sequence
+        //                               with exactly 4 Int elements
+        //                               (the recorder requests
+        //                               `is_slice = true` to mark it
+        //                               as a fixed-length array view;
+        //                               the FFI drops the flag — see
+        //                               the `array_fixed_type_id`
+        //                               comment above).
+        //   * `(u8, u16, u32, u64)`  -> `integer_widths_decoded` Tuple
+        //                               with one Int per width carrying
+        //                               its width-specific type_id.
+        //   * `enum Match`           -> `match_arm_variant` Variant
+        //                               (Add(u64) / Sub(u64) / Mul(u64) /
+        //                               Noop) — each arm body of the
+        //                               match expression in the
+        //                               `match_pattern_test` fixture.
+        let mut emit_option_decoder = false;
+        let mut emit_result_decoder = false;
+        let mut emit_array_fixed_decoder = false;
+        let mut emit_integer_widths_decoder = false;
+        let mut emit_match_decoder = false;
         if let Some(abi) = &self.abi {
             if let Some(out_type) = abi.function_output_type("main") {
-                if out_type.trim() == "(u64, b256, bool)" {
+                let trimmed = out_type.trim();
+                if trimmed == "(u64, b256, bool)" {
                     emit_tuple_decoder = true;
-                } else if out_type.trim() == "enum Outcome" {
+                } else if trimmed == "enum Outcome" {
                     emit_variant_decoder = true;
+                } else if trimmed == "enum Option<u64>" {
+                    emit_option_decoder = true;
+                } else if trimmed == "enum Result<u64, str>" {
+                    emit_result_decoder = true;
+                } else if trimmed == "[u64; 4]" {
+                    emit_array_fixed_decoder = true;
+                } else if trimmed == "(u8, u16, u32, u64)" {
+                    emit_integer_widths_decoder = true;
+                } else if trimmed == "enum Match" {
+                    emit_match_decoder = true;
                 }
             }
         }
@@ -702,6 +789,256 @@ impl FuelRecorder {
                         &mut *writer,
                         "outcome_variant",
                         variant_value,
+                    );
+                }
+
+                // ABI-driven `Option<u64>` decoder.  Discriminator byte 0
+                // = `None`, byte 1 = `Some(u64)` (next 8 bytes BE).
+                // Surfaces with the canonical Sway std variant names so
+                // that downstream tooling can recognise the Option
+                // shape uniformly across recorders.
+                if emit_option_decoder && !payload.is_empty() {
+                    let (variant_name, contents): (&str, ValueRecord) = match payload[0] {
+                        0 => (
+                            "None",
+                            ValueRecord::Tuple {
+                                elements: vec![],
+                                type_id: variant_unit_type_id,
+                            },
+                        ),
+                        1 if payload.len() >= 9 => {
+                            let v =
+                                u64::from_be_bytes(payload[1..9].try_into().expect("8-byte slice"));
+                            (
+                                "Some",
+                                ValueRecord::Int {
+                                    i: v as i64,
+                                    type_id: u64_type_id,
+                                },
+                            )
+                        }
+                        _ => (
+                            "None",
+                            ValueRecord::Tuple {
+                                elements: vec![],
+                                type_id: variant_unit_type_id,
+                            },
+                        ),
+                    };
+                    let value = ValueRecord::Variant {
+                        discriminator: variant_name.to_string(),
+                        contents: Box::new(contents),
+                        type_id: option_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "option_decoded",
+                        value,
+                    );
+                }
+
+                // ABI-driven `Result<u64, str>` decoder.  Discriminator
+                // byte 0 = `Ok(u64)` (next 8 bytes BE), byte 1 = `Err(str)`
+                // (remaining bytes are the error string payload, capped at
+                // 8 bytes per the canonical Sway std `str` slice
+                // convention).
+                if emit_result_decoder && !payload.is_empty() {
+                    let (variant_name, contents): (&str, ValueRecord) = match payload[0] {
+                        0 if payload.len() >= 9 => {
+                            let v =
+                                u64::from_be_bytes(payload[1..9].try_into().expect("8-byte slice"));
+                            (
+                                "Ok",
+                                ValueRecord::Int {
+                                    i: v as i64,
+                                    type_id: u64_type_id,
+                                },
+                            )
+                        }
+                        1 if payload.len() >= 2 => {
+                            let n = (payload.len() - 1).min(8);
+                            let bytes: Vec<ValueRecord> = payload[1..1 + n]
+                                .iter()
+                                .map(|b| ValueRecord::Int {
+                                    i: *b as i64,
+                                    type_id: u64_type_id,
+                                })
+                                .collect();
+                            (
+                                "Err",
+                                ValueRecord::Sequence {
+                                    elements: bytes,
+                                    is_slice: true,
+                                    type_id: result_err_type_id,
+                                },
+                            )
+                        }
+                        _ => (
+                            "Err",
+                            ValueRecord::Sequence {
+                                elements: vec![],
+                                is_slice: true,
+                                type_id: result_err_type_id,
+                            },
+                        ),
+                    };
+                    let value = ValueRecord::Variant {
+                        discriminator: variant_name.to_string(),
+                        contents: Box::new(contents),
+                        type_id: result_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "result_decoded",
+                        value,
+                    );
+                }
+
+                // ABI-driven fixed-length array decoder.  When the ABI
+                // declares the entry-point output as `[u64; 4]` and the
+                // LOGD payload is exactly 32 bytes (4 * 8) the recorder
+                // emits an `array_fixed` `ValueRecord::Sequence` with
+                // four big-endian-decoded u64 elements and
+                // `is_slice = true` (fixed-length array view, distinct
+                // from the heap-owned `vec_dynamic` Sequence with
+                // `is_slice = false`).
+                if emit_array_fixed_decoder && payload.len() == 32 {
+                    let mut elements: Vec<ValueRecord> = Vec::new();
+                    for chunk in payload.chunks_exact(8) {
+                        let word = u64::from_be_bytes(
+                            chunk.try_into().expect("chunks_exact(8) yields 8 bytes"),
+                        );
+                        elements.push(ValueRecord::Int {
+                            i: word as i64,
+                            type_id: u64_type_id,
+                        });
+                    }
+                    let value = ValueRecord::Sequence {
+                        elements,
+                        is_slice: true,
+                        type_id: array_fixed_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "array_fixed",
+                        value,
+                    );
+                }
+
+                // ABI-driven integer-widths decoder.  When the ABI
+                // declares the entry-point output as
+                // `(u8, u16, u32, u64)` and the LOGD payload is exactly
+                // 15 bytes (1 + 2 + 4 + 8) the recorder emits an
+                // `integer_widths_decoded` `ValueRecord::Tuple` whose
+                // four `ValueRecord::Int` elements each carry their
+                // width-specific `type_id`.  The current FFI uses i64
+                // for every Int value — width tagging is structural
+                // (per-element type_id), not intrinsic.
+                if emit_integer_widths_decoder && payload.len() == 15 {
+                    let u8_val = payload[0] as u64;
+                    let u16_val =
+                        u16::from_be_bytes(payload[1..3].try_into().expect("2-byte slice")) as u64;
+                    let u32_val =
+                        u32::from_be_bytes(payload[3..7].try_into().expect("4-byte slice")) as u64;
+                    let u64_val =
+                        u64::from_be_bytes(payload[7..15].try_into().expect("8-byte slice"));
+                    let value = ValueRecord::Tuple {
+                        elements: vec![
+                            ValueRecord::Int {
+                                i: u8_val as i64,
+                                type_id: u8_type_id,
+                            },
+                            ValueRecord::Int {
+                                i: u16_val as i64,
+                                type_id: u16_type_id,
+                            },
+                            ValueRecord::Int {
+                                i: u32_val as i64,
+                                type_id: u32_type_id,
+                            },
+                            ValueRecord::Int {
+                                i: u64_val as i64,
+                                type_id: u64_type_id,
+                            },
+                        ],
+                        type_id: integer_widths_tuple_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "integer_widths_decoded",
+                        value,
+                    );
+                }
+
+                // ABI-driven `enum Match` decoder for the
+                // `match_pattern_test` fixture.  The discriminator
+                // byte selects an arm:
+                //   0 -> `Add(u64)`   (BE u64 in next 8 bytes)
+                //   1 -> `Sub(u64)`   (BE u64 in next 8 bytes)
+                //   2 -> `Mul(u64)`   (BE u64 in next 8 bytes)
+                //   3 -> `Noop`       (no inner payload)
+                // Surfaces as `match_arm_variant`
+                // `ValueRecord::Variant` so each arm body's step
+                // events can be assertable against a distinct arm
+                // name.
+                if emit_match_decoder && !payload.is_empty() {
+                    let (variant_name, contents): (&str, ValueRecord) = match payload[0] {
+                        0 if payload.len() >= 9 => {
+                            let v =
+                                u64::from_be_bytes(payload[1..9].try_into().expect("8-byte slice"));
+                            (
+                                "Add",
+                                ValueRecord::Int {
+                                    i: v as i64,
+                                    type_id: u64_type_id,
+                                },
+                            )
+                        }
+                        1 if payload.len() >= 9 => {
+                            let v =
+                                u64::from_be_bytes(payload[1..9].try_into().expect("8-byte slice"));
+                            (
+                                "Sub",
+                                ValueRecord::Int {
+                                    i: v as i64,
+                                    type_id: u64_type_id,
+                                },
+                            )
+                        }
+                        2 if payload.len() >= 9 => {
+                            let v =
+                                u64::from_be_bytes(payload[1..9].try_into().expect("8-byte slice"));
+                            (
+                                "Mul",
+                                ValueRecord::Int {
+                                    i: v as i64,
+                                    type_id: u64_type_id,
+                                },
+                            )
+                        }
+                        3 => (
+                            "Noop",
+                            ValueRecord::Tuple {
+                                elements: vec![],
+                                type_id: variant_unit_type_id,
+                            },
+                        ),
+                        _ => (
+                            "Unknown",
+                            ValueRecord::None {
+                                type_id: u64_type_id,
+                            },
+                        ),
+                    };
+                    let value = ValueRecord::Variant {
+                        discriminator: variant_name.to_string(),
+                        contents: Box::new(contents),
+                        type_id: variant_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "match_arm_variant",
+                        value,
                     );
                 }
             }

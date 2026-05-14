@@ -37,7 +37,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use fuel_asm::{op, RegId};
+use fuel_asm::{RegId, op};
 
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
@@ -446,9 +446,7 @@ fn test_recorded_trace_via_ct_print_json() {
     ];
     for (name, value) in expected {
         assert!(
-            observed_vars
-                .iter()
-                .any(|(n, v)| n == name && v == value),
+            observed_vars.iter().any(|(n, v)| n == name && v == value),
             "expected step variable `{name}` = {value} in --full output; \
              observed = {observed_vars:?}"
         );
@@ -567,8 +565,8 @@ fn record_bytecode_and_dump_full(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let doc: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("ct-print --full should emit valid JSON");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ct-print --full should emit valid JSON");
 
     // Preserve the temp dir until after the JSON is parsed, then drop.
     drop(temp_dir);
@@ -583,11 +581,7 @@ fn observed_step_lines(doc: &serde_json::Value) -> Vec<i64> {
         .expect("events array")
         .iter()
         .filter(|e| e["kind"] == "step")
-        .map(|e| {
-            e["line"]
-                .as_i64()
-                .expect("step.line must be an integer")
-        })
+        .map(|e| e["line"].as_i64().expect("step.line must be an integer"))
         .collect()
 }
 
@@ -609,10 +603,7 @@ fn observed_int_vars(doc: &serde_json::Value) -> Vec<(String, i64)> {
             continue;
         };
         for v in vars {
-            let name = v["varname"]
-                .as_str()
-                .expect("varname str")
-                .to_string();
+            let name = v["varname"].as_str().expect("varname str").to_string();
             let value = &v["value"];
             assert_eq!(
                 value["kind"].as_str(),
@@ -644,10 +635,7 @@ fn observed_io_events(doc: &serde_json::Value) -> Vec<(String, String)> {
         .iter()
         .filter(|e| e["kind"] == "io")
         .map(|e| {
-            let kind = e["io_kind"]
-                .as_str()
-                .expect("io_kind str")
-                .to_string();
+            let kind = e["io_kind"].as_str().expect("io_kind str").to_string();
             let text = e["text"].as_str().unwrap_or("").to_string();
             (kind, text)
         })
@@ -842,8 +830,16 @@ fn test_control_flow_test_via_ct_print_full() {
     let by_name: std::collections::HashMap<&str, i64> =
         vars.iter().map(|(n, v)| (n.as_str(), *v)).collect();
     assert_eq!(by_name.get("imm_5").copied(), Some(5), "r16 = a = 5");
-    assert_eq!(by_name.get("imm_10").copied(), Some(10), "r17 = threshold = 10");
-    assert_eq!(by_name.get("imm_0").copied(), Some(0), "r19 = 0 (else branch)");
+    assert_eq!(
+        by_name.get("imm_10").copied(),
+        Some(10),
+        "r17 = threshold = 10"
+    );
+    assert_eq!(
+        by_name.get("imm_0").copied(),
+        Some(0),
+        "r19 = 0 (else branch)"
+    );
 
     // ----- io_event: exactly one ioStderr line for the LOG receipt ----
     // The recorder routes Receipt::Log through register_special_event
@@ -954,8 +950,8 @@ fn test_nested_calls_test_via_ct_print_full() {
         "ct-print --full should succeed; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let doc: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("ct-print --full should emit valid JSON");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ct-print --full should emit valid JSON");
 
     drop(temp_dir);
 
@@ -1084,8 +1080,7 @@ fn test_nested_calls_test_emits_call_chain() {
         .arg(&ct_files[0])
         .output()
         .expect("failed to run ct-print --full");
-    let doc: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     drop(temp_dir);
     let call_entries: Vec<&str> = doc["events"]
         .as_array()
@@ -1123,7 +1118,7 @@ fn test_nested_calls_test_emits_call_chain() {
 /// ```
 fn collections_bytecode() -> Vec<u8> {
     vec![
-        op::movi(0x10, 8),                                  // L1: len = 8
+        op::movi(0x10, 8),                                   // L1: len = 8
         op::aloc(0x10),                                      // L2: hp -= 8
         op::movi(0x11, 0xab),                                // L3: r17 = 0xab
         op::sb(RegId::HP, 0x11, 0),                          // L4: hp[0] = 0xab
@@ -1273,9 +1268,9 @@ fn test_collections_test_value_kinds_present() {
 /// ```
 fn error_paths_bytecode() -> Vec<u8> {
     vec![
-        op::movi(0x10, 7),       // L1: a = 7
-        op::movi(0x11, 99),      // L2: err_code = 99
-        op::rvrt(0x11),          // L3: revert with code 99
+        op::movi(0x10, 7),  // L1: a = 7
+        op::movi(0x11, 99), // L2: err_code = 99
+        op::rvrt(0x11),     // L3: revert with code 99
     ]
     .into_iter()
     .collect()
@@ -1845,8 +1840,7 @@ fn script_arith_bytecode_path() -> PathBuf {
 }
 
 fn script_arith_source_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("test-programs/script_arith/src/main.sw")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-programs/script_arith/src/main.sw")
 }
 
 /// Skip-helper for the forc-built fixture.  The recorder is built
@@ -1979,9 +1973,7 @@ fn test_script_arith_test_via_ct_print_full() {
     // the FuelVM's single-step boundary or in forc's emit is caught
     // loudly.
     let counts = &doc["counts"];
-    let step_count = counts["steps"]
-        .as_u64()
-        .expect("counts.steps must be u64");
+    let step_count = counts["steps"].as_u64().expect("counts.steps must be u64");
     assert!(
         step_count > 4,
         "real forc-built script should yield >4 step events; got {step_count} (counts={counts})"
@@ -2040,14 +2032,14 @@ fn test_script_arith_test_via_ct_print_full() {
 /// ```
 fn contract_abi_dispatch_bytecode_real() -> Vec<u8> {
     vec![
-        op::movi(0x10, 0x3CAFE),           // L1: selector_increment
-        op::movi(0x11, 0x3DEAD),           // L2: selector_decrement
-        op::movi(0x12, 0x12345),           // L3: selector_get_value
-        op::movi(0x13, 0x2BEEF),           // L4: selector_set_value
-        op::movi(0x14, 42),                // L5: input value
-        op::addi(0x14, 0x14, 1),           // L6: r20 = 42 + 1 = 43
-        op::log(0x14, 0x00, 0x00, 0x00),   // L7: log(r20)
-        op::ret(RegId::ONE),               // L8: ret
+        op::movi(0x10, 0x3CAFE),         // L1: selector_increment
+        op::movi(0x11, 0x3DEAD),         // L2: selector_decrement
+        op::movi(0x12, 0x12345),         // L3: selector_get_value
+        op::movi(0x13, 0x2BEEF),         // L4: selector_set_value
+        op::movi(0x14, 42),              // L5: input value
+        op::addi(0x14, 0x14, 1),         // L6: r20 = 42 + 1 = 43
+        op::log(0x14, 0x00, 0x00, 0x00), // L7: log(r20)
+        op::ret(RegId::ONE),             // L8: ret
     ]
     .into_iter()
     .collect()
@@ -2076,8 +2068,7 @@ const CONTRACT_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_contract_abi_dispatch_test_via_ct_print_full() {
-    let Some(ct_print) =
-        ct_print_or_skip("test_contract_abi_dispatch_test_via_ct_print_full")
+    let Some(ct_print) = ct_print_or_skip("test_contract_abi_dispatch_test_via_ct_print_full")
     else {
         return;
     };
@@ -2105,8 +2096,7 @@ fn test_contract_abi_dispatch_test_via_ct_print_full() {
         .arg(&ct_files[0])
         .output()
         .expect("ct-print");
-    let doc: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     drop(temp_dir);
 
     assert_metadata_program_eq(&doc, "contract_abi_dispatch_test");
@@ -2227,7 +2217,7 @@ fn test_contract_abi_dispatch_test_via_ct_print_full() {
 /// ```
 fn struct_decoding_bytecode() -> Vec<u8> {
     vec![
-        op::movi(0x10, 16),                                 // L1: len = 16
+        op::movi(0x10, 16),                                  // L1: len = 16
         op::aloc(0x10),                                      // L2: hp -= 16
         op::movi(0x11, 7),                                   // L3: r17 = 7
         op::sw(RegId::HP, 0x11, 0),                          // L4: hp[0..8] = 7
@@ -2379,9 +2369,9 @@ fn test_struct_decoding_test_via_ct_print_full() {
 /// ```
 fn panic_receipt_bytecode() -> Vec<u8> {
     vec![
-        op::movi(0x10, 17),               // L1: sentinel = 17
-        op::movi(0x11, 0),                // L2: r17 = 0 (key_addr base)
-        op::srw(0x12, 0x13, 0x11),        // L3: SRW — panics in script ctx
+        op::movi(0x10, 17),        // L1: sentinel = 17
+        op::movi(0x11, 0),         // L2: r17 = 0 (key_addr base)
+        op::srw(0x12, 0x13, 0x11), // L3: SRW — panics in script ctx
     ]
     .into_iter()
     .collect()
@@ -2505,9 +2495,9 @@ fn test_panic_receipt_test_via_ct_print_full() {
 /// ```
 fn storage_block_bytecode() -> Vec<u8> {
     vec![
-        op::movi(0x10, 99),               // L1: r16 = 99 (sentinel)
-        op::movi(0x11, 0),                // L2: r17 = 0 (key_addr)
-        op::srw(0x10, 0x12, 0x11),        // L3: SRW
+        op::movi(0x10, 99),        // L1: r16 = 99 (sentinel)
+        op::movi(0x11, 0),         // L2: r17 = 0 (key_addr)
+        op::srw(0x10, 0x12, 0x11), // L3: SRW
     ]
     .into_iter()
     .collect()
@@ -2588,9 +2578,9 @@ fn test_storage_block_test_via_ct_print_full() {
 /// ```
 fn storage_map_bytecode() -> Vec<u8> {
     vec![
-        op::movi(0x10, 100),              // L1: r16 = 100 (value)
-        op::movi(0x11, 0),                // L2: r17 = 0 (key_addr)
-        op::sww(0x11, 0x12, 0x10),        // L3: SWW
+        op::movi(0x10, 100),       // L1: r16 = 100 (value)
+        op::movi(0x11, 0),         // L2: r17 = 0 (key_addr)
+        op::sww(0x11, 0x12, 0x10), // L3: SWW
     ]
     .into_iter()
     .collect()
@@ -2882,7 +2872,9 @@ fn test_vec_dynamic_test_via_ct_print_full() {
 
     assert_eq!(
         observed_step_lines(&doc),
-        vec![1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+        vec![
+            1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+        ],
         "step lines must walk L1..L19 in order"
     );
 
@@ -3471,5 +3463,1262 @@ fn test_storage_vec_test_via_ct_print_full() {
         Some(7),
         "StorageVec push value r16 = imm_7 = 7 must surface on the SWW \
          step; by_name = {by_name:?}"
+    );
+}
+
+// ===========================================================================
+// M10 Round 3 fixtures
+//   library / array_fixed / option_result / integer_widths / match_pattern
+// ===========================================================================
+//
+// Round 3 lands the remaining M10 deliverables that pin the
+// recorder's cross-package source-map resolution (library_test) and
+// four additional ABI-driven typed-value decoders.  Each fixture
+// follows the same hand-rolled fuel-asm bytecode + synthesised
+// source map + ABI JSON convention as Round 2 and ships strict pins
+// only — no `>=`, no substring `contains` over arbitrary blobs, no
+// source-text `assert!`.
+
+// --- library_test (cross-package source-map resolution) -------------------
+
+/// Build a bytecode program that simulates a Sway *library* shape:
+/// the driving script's `main` calls into `library::add(a, b)` and
+/// then logs the result.  Real forc-built libraries have no special
+/// wire-level shape — they compile down to ordinary instructions
+/// inlined into the consuming script's bytecode — but the source
+/// map distinguishes the two files.  This fixture pins the
+/// **cross-package source-map resolution** contract: opcodes mapped
+/// to the library file MUST surface as step events whose `path`
+/// ends with the library file name (not the script file name).
+///
+/// Bytecode layout (one instruction per source line in the
+/// synthesised cross-file source map below):
+///
+/// ```text
+/// (script main.sw)
+/// L1: movi r16, 1     // a = 1     (script: arg setup)
+/// L2: movi r17, 2     // b = 2     (script: arg setup)
+/// (library library.sw)
+/// L10: add  r18, r16, r17    // c = a + b = 3   (library body)
+/// L11: muli r19, r18, 5      // d = c * 5 = 15  (library body)
+/// (script main.sw)
+/// L3: log  r19             // log result
+/// L4: ret  RegId::ONE
+/// ```
+fn library_test_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 1),               // (0) script L1
+        op::movi(0x11, 2),               // (1) script L2
+        op::add(0x12, 0x10, 0x11),       // (2) library L10
+        op::muli(0x13, 0x12, 5),         // (3) library L11
+        op::log(0x13, 0x00, 0x00, 0x00), // (4) script L3
+        op::ret(RegId::ONE),             // (5) script L4
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Cross-file source map: opcodes 0/1/4/5 land in `main.sw`, opcodes
+/// 2/3 land in `library.sw`.  This is the cross-package source-map
+/// resolution shape — until forc-pkg integration lands the recorder
+/// cannot derive this from a real `BuiltPackage`, but the synthesised
+/// shape exercises the *recorder*'s end of the contract:
+/// `SwaySourceMap::lookup` returns the per-opcode path, the recorder
+/// passes that into `register_step`, and `ct-print` surfaces the
+/// per-step `path` field.
+fn library_test_source_map(main_path: &PathBuf, lib_path: &PathBuf) -> SwaySourceMap {
+    let entries = vec![
+        (0, main_path.clone(), 1), // script L1
+        (1, main_path.clone(), 2), // script L2
+        (2, lib_path.clone(), 10), // library L10
+        (3, lib_path.clone(), 11), // library L11
+        (4, main_path.clone(), 3), // script L3
+        (5, main_path.clone(), 4), // script L4
+    ];
+    SwaySourceMap::from_line_mapping(entries)
+}
+
+#[test]
+fn test_library_test_via_ct_print_full() {
+    let Some(ct_print) = ct_print_or_skip("test_library_test_via_ct_print_full") else {
+        return;
+    };
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let main_path = temp_dir.path().join("main.sw");
+    let lib_path = temp_dir.path().join("library.sw");
+    let bytecode = library_test_bytecode();
+    let source_map = library_test_source_map(&main_path, &lib_path);
+
+    let recorder = FuelRecorder::new("library_test", &out_dir);
+    recorder
+        .record(bytecode, &source_map, &main_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    assert!(
+        output.status.success(),
+        "ct-print --full should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ct-print --full JSON");
+    drop(temp_dir);
+
+    assert_metadata_program_eq(&doc, "library_test");
+
+    // ----- Path table: BOTH files must appear ------------------------
+    // The recorder's path-resolution path must register a distinct
+    // path-table entry per unique file in the source map.  Order
+    // is encounter-order from `register_step` calls.
+    let paths: Vec<&str> = doc["paths"]
+        .as_array()
+        .expect("paths array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    // Compute the expected stripped paths from the actual temp_dir.
+    // `--strip-paths` (see `normalizePath` in codetracer-trace-format-nim)
+    // either rewrites `/tmp/<rand>/...` to `<tmp>/<rest>` or strips a
+    // workdir prefix to `<workdir>/<rest>`.  The recorder writes the
+    // workdir as the trace's metadata; on this test path the recorder
+    // sets the workdir to the temp_dir parent, so paths come out as
+    // `<workdir>/<rest>`.  Compute both candidates so the strict pin
+    // works under either rule.
+    let main_full = main_path.to_string_lossy().to_string();
+    let lib_full = lib_path.to_string_lossy().to_string();
+    let strip_tmp = |s: &str| -> String {
+        if let Some(rest) = s.strip_prefix("/tmp/") {
+            let mut it = rest.splitn(2, '/');
+            let _drop = it.next();
+            match it.next() {
+                Some(rest) => format!("<tmp>/{rest}"),
+                None => s.to_string(),
+            }
+        } else {
+            s.to_string()
+        }
+    };
+    let want_main_tmp = strip_tmp(&main_full);
+    let want_lib_tmp = strip_tmp(&lib_full);
+    let mut sorted_paths: Vec<&str> = paths.clone();
+    sorted_paths.sort();
+    let mut want_sorted = vec![want_lib_tmp.as_str(), want_main_tmp.as_str()];
+    want_sorted.sort();
+    assert_eq!(
+        sorted_paths, want_sorted,
+        "library_test must register exactly the two path-table entries \
+         (main.sw + library.sw) under their `<tmp>/<rand>/...` strip-paths \
+         form; got {paths:?}"
+    );
+
+    // ----- Step events carry per-step `path` -------------------------
+    // The cross-package source-map resolution contract: each step
+    // event MUST surface the per-opcode path, not the global default.
+    // Library-mapped opcodes (L10/L11) MUST land on library.sw;
+    // script-mapped opcodes (L1/L2/L3/L4 + the start anchor) MUST
+    // land on main.sw.
+    let counts = &doc["counts"];
+    // Steps: AbsoluteStep at line 1 + DeltaStep transitions for each
+    // of the six opcodes (L1, L2, L10, L11, L3, L4).  However, L10
+    // and L11 are >5 lines apart from L2 (gap = 8) and L3 from L11
+    // is also >5 lines apart (gap = 8) — those wide gaps trigger
+    // the `NESTED_CALL_LINE_GAP_THRESHOLD` synthesis (see recorder.rs)
+    // and produce two synthesised in-program calls.  That synthesis
+    // does NOT change the step count or step paths — it only adds
+    // extra `register_call`/`register_return` events.
+    assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(1),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 7 steps + 2 call_entry + 2 call_exit + 1 io = 12 events.
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // The expected step-line walk: anchor L1 + L1, L2, L10, L11, L3,
+    // L4.  This pins the synthesised cross-file routing.
+    assert_eq!(
+        observed_step_lines(&doc),
+        vec![1, 1, 2, 10, 11, 3, 4],
+        "step lines must walk anchor + script L1..L2 -> library \
+         L10..L11 -> script L3..L4"
+    );
+
+    // ----- Per-step path resolution ----------------------------------
+    // Walk every step event and bucket its `path` value by its `line`.
+    // This proves the cross-package source-map resolution: lines 10
+    // and 11 land on library.sw, every other line lands on main.sw.
+    let step_paths: Vec<(i64, String)> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .map(|e| {
+            let line = e["line"].as_i64().expect("step.line");
+            let path = e["path"]
+                .as_str()
+                .expect("step.path must be present after register_step")
+                .to_string();
+            (line, path)
+        })
+        .collect();
+    for (line, path) in &step_paths {
+        if *line == 10 || *line == 11 {
+            assert_eq!(
+                path, &want_lib_tmp,
+                "library-mapped line {line} must land on library.sw \
+                 under its strip-paths form"
+            );
+        } else {
+            assert_eq!(
+                path, &want_main_tmp,
+                "script-mapped line {line} must land on main.sw \
+                 under its strip-paths form"
+            );
+        }
+    }
+}
+
+// --- array_fixed_test (Sway [u64; 4] -> ValueRecord::Sequence) ------------
+
+/// Build a bytecode program that initialises a fixed-length 4-u64
+/// array on the heap and emits its 32-byte payload via LOGD.  The
+/// ABI declares `output.type = "[u64; 4]"`, which drives the
+/// recorder's fixed-length array decoder (registered alongside the
+/// existing `vec_dynamic` Sequence — see recorder.rs:`array_fixed`).
+///
+/// Bytecode layout (one instruction per source line):
+///
+/// ```text
+/// L1:  movi r16, 32          // total len = 32 (4 * 8)
+/// L2:  aloc r16              // hp -= 32
+/// L3:  movi r17, 1           // r17 = 1     (xs[0])
+/// L4:  sw   hp, r17, 0       // hp[0..8]   = 1
+/// L5:  movi r17, 2           // r17 = 2     (xs[1])
+/// L6:  sw   hp, r17, 1       // hp[8..16]  = 2
+/// L7:  movi r17, 3           // r17 = 3     (xs[2])
+/// L8:  sw   hp, r17, 2       // hp[16..24] = 3
+/// L9:  movi r17, 4           // r17 = 4     (xs[3])
+/// L10: sw   hp, r17, 3       // hp[24..32] = 4
+/// L11: logd zero, zero, hp, r16   // LOGD payload (32 bytes)
+/// L12: ret  RegId::ONE
+/// ```
+fn array_fixed_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 32),                                  // L1
+        op::aloc(0x10),                                      // L2
+        op::movi(0x11, 1),                                   // L3
+        op::sw(RegId::HP, 0x11, 0),                          // L4
+        op::movi(0x11, 2),                                   // L5
+        op::sw(RegId::HP, 0x11, 1),                          // L6
+        op::movi(0x11, 3),                                   // L7
+        op::sw(RegId::HP, 0x11, 2),                          // L8
+        op::movi(0x11, 4),                                   // L9
+        op::sw(RegId::HP, 0x11, 3),                          // L10
+        op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x10), // L11
+        op::ret(RegId::ONE),                                 // L12
+    ]
+    .into_iter()
+    .collect()
+}
+
+const ARRAY_FIXED_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [],
+            "output": { "name": "", "type": "[u64; 4]" }
+        }
+    ]
+}"#;
+
+#[test]
+fn test_array_fixed_test_via_ct_print_full() {
+    let Some(ct_print) = ct_print_or_skip("test_array_fixed_test_via_ct_print_full") else {
+        return;
+    };
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join("array_fixed_test.sw");
+    let bytecode = array_fixed_bytecode();
+    let num_instructions = bytecode.len() / 4;
+    let source_map = synthetic_source_map(&source_path, num_instructions);
+
+    let abi = codetracer_fuel_recorder::abi_decoder::AbiSchema::from_json(ARRAY_FIXED_ABI_JSON)
+        .expect("ABI must parse");
+    let recorder = FuelRecorder::with_abi("array_fixed_test", &out_dir, abi);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+
+    assert_metadata_program_eq(&doc, "array_fixed_test");
+
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main"]);
+
+    let counts = &doc["counts"];
+    // 13 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L12.
+    assert_eq!(counts["steps"].as_u64(), Some(13), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(1),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 14, "13 steps + 1 io = 14 events");
+    assert_step_indices_monotonic(&doc);
+
+    assert_eq!(
+        observed_step_lines(&doc),
+        vec![1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "step lines must walk L1..L12 in order"
+    );
+
+    // ----- ValueRecord kinds at the top level -------------------------
+    // The 32-byte LOGD payload triggers four structured surfaces:
+    //   * `logd_payload`  Sequence (byte-level)
+    //   * `logd_struct`   Struct  (4 BE u64 fields)
+    //   * `vec_dynamic`   Sequence (4 Int elements, is_slice = false)
+    //   * `array_fixed`   Sequence (4 Int elements, is_slice = false
+    //                       in the encoded CBOR — the recorder
+    //                       requests `is_slice = true`, dropped by FFI)
+    // Plus per-register Int.
+    let kinds: std::collections::BTreeSet<String> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| v["value"]["kind"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert_eq!(
+        kinds,
+        ["Int", "Sequence", "Struct"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<std::collections::BTreeSet<String>>(),
+        "array_fixed_test must surface Int + Sequence + Struct kinds; \
+         got {kinds:?}"
+    );
+
+    // ----- The `array_fixed` Sequence MUST decode to [1, 2, 3, 4] -----
+    let array_fixed_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("array_fixed"))
+        .expect("array_fixed variable must surface on a step event");
+    assert_eq!(
+        array_fixed_var["value"]["kind"].as_str(),
+        Some("Sequence"),
+        "array_fixed must decode as ValueRecord::Sequence; got {}",
+        array_fixed_var["value"]
+    );
+    let elements = array_fixed_var["value"]["elements"]
+        .as_array()
+        .expect("Sequence.elements array");
+    assert_eq!(
+        elements.len(),
+        4,
+        "array_fixed must have exactly 4 elements (Sway `[u64; 4]`); \
+         got {elements:?}"
+    );
+    let decoded: Vec<i64> = elements
+        .iter()
+        .map(|e| {
+            assert_eq!(
+                e["kind"].as_str(),
+                Some("Int"),
+                "array_fixed elements must decode as Int; got {e}"
+            );
+            e["i"].as_i64().expect("Int.i must be i64")
+        })
+        .collect();
+    assert_eq!(
+        decoded,
+        vec![1, 2, 3, 4],
+        "array_fixed elements must match the Sway `let xs: [u64; 4] = \
+         [1, 2, 3, 4];` initialisation"
+    );
+    // FFI gap: the recorder requests `is_slice = true` but the
+    // Rust -> Nim FFI for `ct_value_begin_sequence` drops the flag,
+    // so it lands as `false` in the encoded CBOR.  The structural
+    // differentiation between fixed-length and dynamic vectors is
+    // preserved via the `array_fixed` vs `vec_dynamic` naming.  Same
+    // gap pinned in `test_tuple_decoding_test_via_ct_print_full`.
+    assert_eq!(
+        array_fixed_var["value"]["is_slice"].as_bool(),
+        Some(false),
+        "array_fixed Sequence is_slice surfaces as false today (FFI \
+         gap; the recorder requests is_slice = true but the Rust -> \
+         Nim FFI drops the flag).  The differentiation between \
+         array_fixed and vec_dynamic is preserved via naming."
+    );
+
+    // ----- Per-step element-count walk --------------------------------
+    // The `array_fixed` Sequence is emitted only on the LOGD step
+    // (one emission, never partial — fixed-length arrays don't grow).
+    let mut array_fixed_emissions: Vec<(i64, usize)> = Vec::new();
+    for ev in events {
+        if ev["kind"] != "step" {
+            continue;
+        }
+        let line = ev["line"].as_i64().unwrap();
+        let Some(vars) = ev["vars"].as_array() else {
+            continue;
+        };
+        for v in vars {
+            if v["varname"].as_str() != Some("array_fixed") {
+                continue;
+            }
+            let n = v["value"]["elements"].as_array().unwrap().len();
+            array_fixed_emissions.push((line, n));
+        }
+    }
+    assert_eq!(
+        array_fixed_emissions.len(),
+        1,
+        "array_fixed must surface exactly once (fixed-length arrays \
+         emit one decoded value per LOGD); got {array_fixed_emissions:?}"
+    );
+    assert_eq!(
+        array_fixed_emissions[0].1, 4,
+        "array_fixed emission count must be 4; got {array_fixed_emissions:?}"
+    );
+
+    // ----- io_event payload: the 32-byte LOGD ------------------------
+    // Pin the canonical LOGD io_event surface: exactly one io_event,
+    // routed through ioStderr, whose text payload includes the
+    // structured `len=` slot reporting the 32-byte payload size.
+    // The full text shape is `ra=0 rb=0 len=32 pc=0x... data=0x...`;
+    // we extract the `len=` field and assert on the exact integer
+    // rather than a substring match.
+    let io_events = observed_io_events(&doc);
+    assert_eq!(io_events.len(), 1, "exactly one LOGD io_event expected");
+    let (kind, text) = &io_events[0];
+    assert_eq!(kind, "ioStderr", "LOGD receipt must route to ioStderr");
+    let len_field: u64 = text
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("len="))
+        .expect("LOGD io_event text must include a `len=` key=value slot")
+        .parse()
+        .expect("`len=` value must parse as u64");
+    assert_eq!(
+        len_field, 32,
+        "LOGD receipt must report len=32 (the 4 * 8 byte payload); \
+         text={text}"
+    );
+}
+
+// --- option_result_test (Sway Option<u64> / Result<u64, str>) -------------
+
+fn option_some_bytecode(value: u64) -> Vec<u8> {
+    let mut prog: Vec<fuel_asm::Instruction> = Vec::new();
+    // 1 disc byte + 8 BE u64 = 9 bytes
+    prog.push(op::movi(0x10, 9));
+    prog.push(op::aloc(0x10));
+    prog.push(op::movi(0x11, 1)); // discriminator = 1 (Some)
+    prog.push(op::sb(RegId::HP, 0x11, 0));
+    let bytes = value.to_be_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        prog.push(op::movi(0x11, *b as u32));
+        prog.push(op::sb(RegId::HP, 0x11, (i as u16) + 1));
+    }
+    prog.push(op::movi(0x12, 9));
+    prog.push(op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12));
+    prog.push(op::ret(RegId::ONE));
+    prog.into_iter().collect()
+}
+
+fn option_none_bytecode() -> Vec<u8> {
+    // 1 disc byte + 8 zero bytes (None still padded to canonical 9-byte
+    // Option<u64> wire shape — the discriminator is the only meaningful
+    // byte).
+    let mut prog: Vec<fuel_asm::Instruction> = Vec::new();
+    prog.push(op::movi(0x10, 9));
+    prog.push(op::aloc(0x10));
+    prog.push(op::movi(0x11, 0)); // discriminator = 0 (None)
+    prog.push(op::sb(RegId::HP, 0x11, 0));
+    // Padding bytes already zero from aloc — explicitly write one
+    // sentinel zero so the synthesised source map has at least one
+    // step beyond the discriminator.
+    prog.push(op::movi(0x11, 0));
+    prog.push(op::sb(RegId::HP, 0x11, 1));
+    prog.push(op::movi(0x12, 9));
+    prog.push(op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12));
+    prog.push(op::ret(RegId::ONE));
+    prog.into_iter().collect()
+}
+
+fn result_ok_bytecode(value: u64) -> Vec<u8> {
+    let mut prog: Vec<fuel_asm::Instruction> = Vec::new();
+    prog.push(op::movi(0x10, 9));
+    prog.push(op::aloc(0x10));
+    prog.push(op::movi(0x11, 0)); // discriminator = 0 (Ok)
+    prog.push(op::sb(RegId::HP, 0x11, 0));
+    let bytes = value.to_be_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        prog.push(op::movi(0x11, *b as u32));
+        prog.push(op::sb(RegId::HP, 0x11, (i as u16) + 1));
+    }
+    prog.push(op::movi(0x12, 9));
+    prog.push(op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12));
+    prog.push(op::ret(RegId::ONE));
+    prog.into_iter().collect()
+}
+
+fn result_err_bytecode(msg: &[u8]) -> Vec<u8> {
+    let total_len = (msg.len() + 1) as u32;
+    let mut prog: Vec<fuel_asm::Instruction> = Vec::new();
+    prog.push(op::movi(0x10, total_len));
+    prog.push(op::aloc(0x10));
+    prog.push(op::movi(0x11, 1)); // discriminator = 1 (Err)
+    prog.push(op::sb(RegId::HP, 0x11, 0));
+    for (i, b) in msg.iter().enumerate() {
+        prog.push(op::movi(0x11, *b as u32));
+        prog.push(op::sb(RegId::HP, 0x11, (i as u16) + 1));
+    }
+    prog.push(op::movi(0x12, total_len));
+    prog.push(op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12));
+    prog.push(op::ret(RegId::ONE));
+    prog.into_iter().collect()
+}
+
+const OPTION_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [],
+            "output": { "name": "", "type": "enum Option<u64>" }
+        }
+    ]
+}"#;
+
+const RESULT_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [],
+            "output": { "name": "", "type": "enum Result<u64, str>" }
+        }
+    ]
+}"#;
+
+fn record_with_abi_and_dump_full(
+    test_name: &str,
+    program_name: &str,
+    bytecode: Vec<u8>,
+    abi_json: &str,
+) -> Option<serde_json::Value> {
+    let ct_print = ct_print_or_skip(test_name)?;
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join(format!("{program_name}.sw"));
+    let num_instructions = bytecode.len() / 4;
+    let source_map = synthetic_source_map(&source_path, num_instructions);
+
+    let abi = codetracer_fuel_recorder::abi_decoder::AbiSchema::from_json(abi_json)
+        .expect("ABI must parse");
+    let recorder = FuelRecorder::with_abi(program_name, &out_dir, abi);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+    Some(doc)
+}
+
+#[test]
+fn test_option_result_test_via_ct_print_full() {
+    // ----- Some(42) -------------------------------------------------------
+    let Some(doc_some) = record_with_abi_and_dump_full(
+        "test_option_result_test_via_ct_print_full",
+        "option_result_test_some",
+        option_some_bytecode(42),
+        OPTION_ABI_JSON,
+    ) else {
+        return;
+    };
+    assert_metadata_program_eq(&doc_some, "option_result_test_some");
+    let some_var = doc_some["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("option_decoded"))
+        .expect("Some run must surface option_decoded");
+    assert_eq!(
+        some_var["value"]["kind"].as_str(),
+        Some("Variant"),
+        "option_decoded must decode as ValueRecord::Variant; got {}",
+        some_var["value"]
+    );
+    assert_eq!(
+        some_var["value"]["discriminator"].as_str(),
+        Some("Some"),
+        "Some(42) discriminator must be the canonical Sway std \
+         variant name `Some`"
+    );
+    assert_eq!(
+        some_var["value"]["contents"]["kind"].as_str(),
+        Some("Int"),
+        "Some.contents must be Int (u64 payload)"
+    );
+    assert_eq!(
+        some_var["value"]["contents"]["i"].as_i64(),
+        Some(42),
+        "Some(42) inner payload must decode to 42"
+    );
+
+    // ----- None -----------------------------------------------------------
+    let Some(doc_none) = record_with_abi_and_dump_full(
+        "test_option_result_test_via_ct_print_full",
+        "option_result_test_none",
+        option_none_bytecode(),
+        OPTION_ABI_JSON,
+    ) else {
+        return;
+    };
+    let none_var = doc_none["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("option_decoded"))
+        .expect("None run must surface option_decoded");
+    assert_eq!(none_var["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(
+        none_var["value"]["discriminator"].as_str(),
+        Some("None"),
+        "None discriminator must be the canonical Sway std \
+         variant name `None`"
+    );
+    assert_eq!(
+        none_var["value"]["contents"]["kind"].as_str(),
+        Some("Tuple"),
+        "None.contents must be Tuple (the unit type)"
+    );
+    let none_inner = none_var["value"]["contents"]["elements"]
+        .as_array()
+        .expect("None inner Tuple elements");
+    assert_eq!(
+        none_inner.len(),
+        0,
+        "None inner Tuple must be empty (unit type ())"
+    );
+
+    // ----- Ok(42) ---------------------------------------------------------
+    let Some(doc_ok) = record_with_abi_and_dump_full(
+        "test_option_result_test_via_ct_print_full",
+        "option_result_test_ok",
+        result_ok_bytecode(42),
+        RESULT_ABI_JSON,
+    ) else {
+        return;
+    };
+    let ok_var = doc_ok["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("result_decoded"))
+        .expect("Ok run must surface result_decoded");
+    assert_eq!(ok_var["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(
+        ok_var["value"]["discriminator"].as_str(),
+        Some("Ok"),
+        "Ok(42) discriminator must be the canonical Sway std \
+         variant name `Ok`"
+    );
+    assert_eq!(
+        ok_var["value"]["contents"]["kind"].as_str(),
+        Some("Int"),
+        "Ok.contents must be Int (u64 payload)"
+    );
+    assert_eq!(
+        ok_var["value"]["contents"]["i"].as_i64(),
+        Some(42),
+        "Ok(42) inner payload must decode to 42"
+    );
+
+    // ----- Err("boom") ----------------------------------------------------
+    let Some(doc_err) = record_with_abi_and_dump_full(
+        "test_option_result_test_via_ct_print_full",
+        "option_result_test_err",
+        result_err_bytecode(b"boom"),
+        RESULT_ABI_JSON,
+    ) else {
+        return;
+    };
+    let err_var = doc_err["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("result_decoded"))
+        .expect("Err run must surface result_decoded");
+    assert_eq!(err_var["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(
+        err_var["value"]["discriminator"].as_str(),
+        Some("Err"),
+        "Err discriminator must be the canonical Sway std \
+         variant name `Err`"
+    );
+    assert_eq!(
+        err_var["value"]["contents"]["kind"].as_str(),
+        Some("Sequence"),
+        "Err.contents must be Sequence (str payload)"
+    );
+    let err_bytes = err_var["value"]["contents"]["elements"]
+        .as_array()
+        .expect("Err inner Sequence elements");
+    let decoded: Vec<u8> = err_bytes
+        .iter()
+        .map(|b| b["i"].as_i64().unwrap() as u8)
+        .collect();
+    assert_eq!(
+        decoded,
+        b"boom".to_vec(),
+        "Err(\"boom\") inner payload must decode to the ASCII bytes `boom`"
+    );
+}
+
+// --- integer_widths_test (u8 / u16 / u32 / u64 width tagging) -------------
+
+/// Build a bytecode program that initialises one value of each
+/// integer width with a value that exceeds the next-narrower max
+/// (`u8::MAX + 1` as `u16`, `u16::MAX + 1` as `u32`,
+/// `u32::MAX + 1` as `u64`) and emits the four-value 15-byte
+/// payload via LOGD.  The ABI declares
+/// `output.type = "(u8, u16, u32, u64)"`, which drives the
+/// recorder's integer-widths tuple decoder.
+///
+/// Wire layout (15 bytes total, big-endian per element):
+///
+/// ```text
+/// [0..1]   u8  = 0xFF              (u8::MAX, sentinel byte)
+/// [1..3]   u16 = 0x0100            (u8::MAX + 1)
+/// [3..7]   u32 = 0x00010000        (u16::MAX + 1)
+/// [7..15]  u64 = 0x0000000100000000 (u32::MAX + 1)
+/// ```
+fn integer_widths_bytecode() -> Vec<u8> {
+    // We allocate 15 bytes and write each width-specific slice one
+    // byte at a time via SB so that each STORE lands on a distinct
+    // synthetic source line — this is the same convention every
+    // other M10 fixture follows.
+    let payload: Vec<u8> = {
+        let mut v: Vec<u8> = Vec::with_capacity(15);
+        v.push(0xFFu8); // u8 = 255
+        v.extend_from_slice(&((u8::MAX as u16) + 1).to_be_bytes()); // u16 = 256
+        v.extend_from_slice(&((u16::MAX as u32) + 1).to_be_bytes()); // u32 = 65536
+        v.extend_from_slice(&((u32::MAX as u64) + 1).to_be_bytes()); // u64 = 4294967296
+        v
+    };
+    assert_eq!(
+        payload.len(),
+        15,
+        "integer_widths wire layout is 1+2+4+8 = 15 bytes"
+    );
+    let mut prog: Vec<fuel_asm::Instruction> = Vec::new();
+    prog.push(op::movi(0x10, 15));
+    prog.push(op::aloc(0x10));
+    for (i, b) in payload.iter().enumerate() {
+        prog.push(op::movi(0x11, *b as u32));
+        prog.push(op::sb(RegId::HP, 0x11, i as u16));
+    }
+    prog.push(op::movi(0x12, 15));
+    prog.push(op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12));
+    prog.push(op::ret(RegId::ONE));
+    prog.into_iter().collect()
+}
+
+const INTEGER_WIDTHS_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [],
+            "output": { "name": "", "type": "(u8, u16, u32, u64)" }
+        }
+    ]
+}"#;
+
+#[test]
+fn test_integer_widths_test_via_ct_print_full() {
+    let Some(doc) = record_with_abi_and_dump_full(
+        "test_integer_widths_test_via_ct_print_full",
+        "integer_widths_test",
+        integer_widths_bytecode(),
+        INTEGER_WIDTHS_ABI_JSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_eq(&doc, "integer_widths_test");
+
+    // ----- The integer-widths Tuple MUST surface ----------------------
+    let widths_var = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("integer_widths_decoded"))
+        .expect("integer_widths_decoded variable must surface on a step event");
+    assert_eq!(
+        widths_var["value"]["kind"].as_str(),
+        Some("Tuple"),
+        "integer_widths_decoded must decode as ValueRecord::Tuple; got {}",
+        widths_var["value"]
+    );
+    let elements = widths_var["value"]["elements"]
+        .as_array()
+        .expect("Tuple.elements array");
+    assert_eq!(
+        elements.len(),
+        4,
+        "integer_widths_decoded must have exactly 4 elements (u8, u16, \
+         u32, u64); got {elements:?}"
+    );
+
+    // ----- Each element must decode to the expected width-specific value
+    // The values are chosen so that each one exceeds the next-narrower
+    // max — proving the recorder is reading the correct number of bytes
+    // per width (a u8-as-u16 misread would surface as 0, a u16-as-u32
+    // misread would surface as 0, etc.).
+    let expected: Vec<i64> = vec![
+        0xFFi64,     // u8  = 255
+        0x100,       // u16 = 256
+        0x10000,     // u32 = 65536
+        0x100000000, // u64 = 4294967296
+    ];
+    for (i, (e, want)) in elements.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            e["kind"].as_str(),
+            Some("Int"),
+            "integer_widths element {i} must decode as Int; got {e}"
+        );
+        assert_eq!(
+            e["i"].as_i64(),
+            Some(*want),
+            "integer_widths element {i} must decode to {want}; got {e}"
+        );
+    }
+
+    // ----- Width-specific type_id tagging ----------------------------
+    // Each element MUST carry a distinct `type_id` derived from its
+    // width-specific type registration (`u8` / `u16` / `u32` / `u64`).
+    // The current FFI uses i64 for every Int *value*, so the *width*
+    // is preserved structurally via the `type_id` -> type-name map
+    // rather than via the value's own representation.  This test pins
+    // the structural shape — once a typed `ValueRecord::Int` width
+    // metadata path lands in the recorder, the per-element `type_id`s
+    // here will continue to be unique (they're already keyed off the
+    // type-name), and the test will keep passing without modification.
+    //
+    // Documented limitation: the recorder cannot yet emit a separate
+    // ValueRecord::IntN-style intrinsic width — it surfaces every
+    // integer as a 64-bit-wide `Int`, with the width carried only via
+    // the per-element `type_id`.  See recorder.rs comment near
+    // `integer_widths_tuple_type_id` for the gateway plan.
+    let type_ids: Vec<i64> = elements
+        .iter()
+        .map(|e| e["type_id"].as_i64().expect("type_id must be present"))
+        .collect();
+    let unique: std::collections::BTreeSet<i64> = type_ids.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        4,
+        "integer_widths elements must each have a distinct type_id \
+         (one per width: u8 / u16 / u32 / u64); got type_ids={type_ids:?}"
+    );
+
+    // ----- Per-element type-name resolution --------------------------
+    // The trace's `types` table maps `type_id` -> name; pin the
+    // canonical width name registered for each element by indexing
+    // the `types` table at each element's `type_id` and asserting
+    // the exact width name in declaration order.
+    let type_names: Vec<&str> = doc["types"]
+        .as_array()
+        .expect("types array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    let element_type_names: Vec<&str> = type_ids
+        .iter()
+        .map(|tid| {
+            *type_names
+                .get(*tid as usize)
+                .unwrap_or_else(|| panic!("type_id {tid} out of range; types={type_names:?}"))
+        })
+        .collect();
+    assert_eq!(
+        element_type_names,
+        vec!["u8", "u16", "u32", "u64"],
+        "integer_widths element type_ids must resolve to the canonical \
+         per-width names in declaration order; got {element_type_names:?}, \
+         types table={type_names:?}"
+    );
+}
+
+// --- match_pattern_test (match on enum -> distinct arm step events) -------
+
+/// Build a bytecode program that runs one arm of an enum `match`
+/// expression.  The discriminator picks the arm; the bound payload
+/// value surfaces in the matching `ValueRecord::Variant` arm body.
+///
+/// Wire layout (9 bytes for value-bearing arms, 1 byte for `Noop`):
+///   * Add(u64)  -> [0, BE u64]
+///   * Sub(u64)  -> [1, BE u64]
+///   * Mul(u64)  -> [2, BE u64]
+///   * Noop      -> [3]
+///
+/// Each arm is fed through `match_arm_bytecode(disc, payload)` and
+/// surfaces a distinct synthetic source-line walk so the strict pin
+/// can assert that **each arm produces a different step-line
+/// sequence**.  Each arm also runs an arm-specific arithmetic
+/// computation on the bound payload (Add adds 100, Sub subtracts 1,
+/// Mul multiplies by 3, Noop does nothing) — so the bytecode shape
+/// AND the bytecode contents differ per arm.  This is the
+/// hand-rolled-bytecode analogue of distinct match arm bodies.
+fn match_arm_bytecode(discriminator: u8, payload_bytes: &[u8]) -> Vec<u8> {
+    let total_len = (payload_bytes.len() + 1) as u32;
+    let mut prog: Vec<fuel_asm::Instruction> = Vec::new();
+    prog.push(op::movi(0x10, total_len));
+    prog.push(op::aloc(0x10));
+    prog.push(op::movi(0x11, discriminator as u32));
+    prog.push(op::sb(RegId::HP, 0x11, 0));
+    for (i, b) in payload_bytes.iter().enumerate() {
+        prog.push(op::movi(0x11, *b as u32));
+        prog.push(op::sb(RegId::HP, 0x11, (i as u16) + 1));
+    }
+    prog.push(op::movi(0x12, total_len));
+    prog.push(op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12));
+    // Arm-specific body — a small distinct arithmetic on a sentinel
+    // register so each arm executes different ops AND, via the
+    // arm-specific source map, lands on different source lines.
+    match discriminator {
+        0 => {
+            // Add arm: r19 = 100 + 1 = 101
+            prog.push(op::movi(0x13, 100));
+            prog.push(op::addi(0x13, 0x13, 1));
+        }
+        1 => {
+            // Sub arm: r19 = 200 - 2 = 198 (one extra op vs Add)
+            prog.push(op::movi(0x13, 200));
+            prog.push(op::movi(0x14, 2));
+            prog.push(op::sub(0x13, 0x13, 0x14));
+        }
+        2 => {
+            // Mul arm: r19 = 5 * 3 = 15 (two muli ops -> distinct shape)
+            prog.push(op::movi(0x13, 5));
+            prog.push(op::muli(0x13, 0x13, 3));
+            prog.push(op::muli(0x13, 0x13, 1));
+            prog.push(op::muli(0x13, 0x13, 1));
+        }
+        3 => {
+            // Noop arm: no body ops at all (already has the trailing ret).
+        }
+        _ => unreachable!("match arm discriminator must be 0..=3"),
+    }
+    prog.push(op::ret(RegId::ONE));
+    prog.into_iter().collect()
+}
+
+/// Source map for a match-arm bytecode program.  The arm body's
+/// instructions are mapped to a distinct decade-aligned line range
+/// per arm:
+///
+///   * Add  arm body -> lines 100..199
+///   * Sub  arm body -> lines 200..299
+///   * Mul  arm body -> lines 300..399
+///   * Noop arm body -> (no body — only the prelude/LOGD)
+///
+/// The prelude (movi len + aloc + the disc/payload SB chain + LOGD)
+/// is mapped to lines 1..N so it stays uniform across arms; the
+/// arm-specific body lines 100/200/300+ are what produce the
+/// distinct step-line walk per arm.
+fn match_arm_source_map(
+    discriminator: u8,
+    bytecode_len: usize,
+    source_path: &PathBuf,
+) -> SwaySourceMap {
+    // Number of body instructions per arm (must match `match_arm_bytecode`).
+    let body_count = match discriminator {
+        0 => 2,
+        1 => 3,
+        2 => 4,
+        3 => 0,
+        _ => unreachable!(),
+    };
+    let total = bytecode_len / 4;
+    // Prelude = total - body_count - 1 (the trailing RET) instructions.
+    let prelude_count = total - body_count - 1;
+    let body_base: u32 = match discriminator {
+        0 => 100,
+        1 => 200,
+        2 => 300,
+        3 => 0, // Noop has no body
+        _ => unreachable!(),
+    };
+    let mut entries: Vec<(usize, PathBuf, u32)> = Vec::new();
+    for i in 0..prelude_count {
+        entries.push((i, source_path.clone(), (i + 1) as u32));
+    }
+    for i in 0..body_count {
+        entries.push((prelude_count + i, source_path.clone(), body_base + i as u32));
+    }
+    // Trailing RET — uniform line so the arm step walks differ ONLY in
+    // the body region.
+    entries.push((total - 1, source_path.clone(), 999));
+    SwaySourceMap::from_line_mapping(entries)
+}
+
+const MATCH_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [],
+            "output": { "name": "", "type": "enum Match" }
+        }
+    ]
+}"#;
+
+/// Drive one match arm through the recorder + ct-print pipeline.
+/// Mirrors `record_with_abi_and_dump_full` but uses an arm-specific
+/// source map (`match_arm_source_map`) so the body lines land in
+/// arm-specific decade-aligned ranges.
+fn record_match_arm_and_dump_full(
+    test_name: &str,
+    program_name: &str,
+    discriminator: u8,
+    payload: &[u8],
+) -> Option<serde_json::Value> {
+    let ct_print = ct_print_or_skip(test_name)?;
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join(format!("{program_name}.sw"));
+    let bytecode = match_arm_bytecode(discriminator, payload);
+    let source_map = match_arm_source_map(discriminator, bytecode.len(), &source_path);
+
+    let abi = codetracer_fuel_recorder::abi_decoder::AbiSchema::from_json(MATCH_ABI_JSON)
+        .expect("ABI must parse");
+    let recorder = FuelRecorder::with_abi(program_name, &out_dir, abi);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+    Some(doc)
+}
+
+#[test]
+fn test_match_pattern_test_via_ct_print_full() {
+    // Run the four arms.  Each is a separate recording (a Sway `match`
+    // executes exactly one arm per evaluation; we model that by
+    // recording one run per arm).  Strict pin: each run produces a
+    // distinct step-line sequence (arm-specific source map +
+    // arm-specific body bytecode), and the bound payload value (where
+    // present) surfaces in the matching `ValueRecord::Variant`.
+
+    let runs: Vec<(&str, u8, Vec<u8>, &str, Option<i64>, u32)> = vec![
+        (
+            "match_pattern_test_add",
+            0,
+            7u64.to_be_bytes().to_vec(),
+            "Add",
+            Some(7),
+            100,
+        ),
+        (
+            "match_pattern_test_sub",
+            1,
+            11u64.to_be_bytes().to_vec(),
+            "Sub",
+            Some(11),
+            200,
+        ),
+        (
+            "match_pattern_test_mul",
+            2,
+            13u64.to_be_bytes().to_vec(),
+            "Mul",
+            Some(13),
+            300,
+        ),
+        ("match_pattern_test_noop", 3, vec![], "Noop", None, 0),
+    ];
+
+    let mut step_walks: Vec<(String, Vec<i64>)> = Vec::new();
+
+    for (program_name, disc, payload, want_arm, want_value, body_base_line) in &runs {
+        let Some(doc) = record_match_arm_and_dump_full(
+            "test_match_pattern_test_via_ct_print_full",
+            program_name,
+            *disc,
+            payload,
+        ) else {
+            return;
+        };
+
+        assert_metadata_program_eq(&doc, program_name);
+
+        let walk = observed_step_lines(&doc);
+        step_walks.push(((*program_name).to_string(), walk.clone()));
+
+        // ----- The match_arm_variant MUST surface with the right arm
+        let arm_var = doc["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "step")
+            .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+            .find(|v| v["varname"].as_str() == Some("match_arm_variant"))
+            .unwrap_or_else(|| panic!("{program_name}: match_arm_variant must surface"));
+        assert_eq!(
+            arm_var["value"]["kind"].as_str(),
+            Some("Variant"),
+            "{program_name}: match_arm_variant must decode as ValueRecord::Variant; \
+             got {}",
+            arm_var["value"]
+        );
+        assert_eq!(
+            arm_var["value"]["discriminator"].as_str(),
+            Some(*want_arm),
+            "{program_name}: arm discriminator must be `{want_arm}`"
+        );
+        match want_value {
+            Some(expected) => {
+                assert_eq!(
+                    arm_var["value"]["contents"]["kind"].as_str(),
+                    Some("Int"),
+                    "{program_name}: {want_arm}.contents must be Int (u64 payload)"
+                );
+                assert_eq!(
+                    arm_var["value"]["contents"]["i"].as_i64(),
+                    Some(*expected),
+                    "{program_name}: {want_arm} payload must decode to {expected}"
+                );
+            }
+            None => {
+                assert_eq!(
+                    arm_var["value"]["contents"]["kind"].as_str(),
+                    Some("Tuple"),
+                    "{program_name}: {want_arm}.contents must be Tuple (unit)"
+                );
+                let inner = arm_var["value"]["contents"]["elements"]
+                    .as_array()
+                    .expect("inner Tuple elements");
+                assert_eq!(
+                    inner.len(),
+                    0,
+                    "{program_name}: {want_arm} inner Tuple must be empty"
+                );
+            }
+        }
+
+        // ----- Body lines land in the arm-specific decade range -----
+        // For Add/Sub/Mul the body lines are 100/200/300+; for Noop
+        // there are no body lines (the source map skips straight from
+        // the prelude into the trailing RET at line 999).
+        //
+        // The expected body-instruction counts are pinned by
+        // `match_arm_source_map`: Add=2, Sub=3, Mul=4, Noop=0.  The
+        // recorder emits one step per body opcode, so the body-line
+        // subsequence must be exactly `[base, base+1, ..., base+N-1]`.
+        let want_body_lines: Vec<i64> = if *body_base_line == 0 {
+            Vec::new()
+        } else {
+            let n: i64 = match *disc {
+                0 => 2,
+                1 => 3,
+                2 => 4,
+                _ => unreachable!("body_base_line>0 only for arms 0/1/2"),
+            };
+            (0..n).map(|i| *body_base_line as i64 + i).collect()
+        };
+        let body_lines: Vec<i64> = walk
+            .iter()
+            .copied()
+            .filter(|l| {
+                *body_base_line > 0
+                    && *l >= *body_base_line as i64
+                    && *l < (*body_base_line as i64 + 100)
+            })
+            .collect();
+        assert_eq!(
+            body_lines, want_body_lines,
+            "{program_name}: arm body must produce the exact body-line \
+             subsequence {want_body_lines:?}; walk={walk:?}"
+        );
+    }
+
+    // ----- Each arm produces a DISTINCT step-line sequence -----------
+    // Sway `match` evaluates exactly one arm per call — distinct arms
+    // therefore execute distinct bytecode and therefore yield distinct
+    // step-line walks.  The arm-specific source map (decade-aligned
+    // body line ranges 100/200/300+) and arm-specific body bytecode
+    // ensure no two arms yield the same trace.
+    let unique_walks: std::collections::BTreeSet<Vec<i64>> =
+        step_walks.iter().map(|(_, w)| w.clone()).collect();
+    assert_eq!(
+        unique_walks.len(),
+        runs.len(),
+        "each match arm must produce a distinct step-line sequence; \
+         got walks={step_walks:?}"
     );
 }
