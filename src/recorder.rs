@@ -302,6 +302,39 @@ impl FuelRecorder {
         // additional type_id is needed beyond `outcome_variant` /
         // `variant_str8_type_id` / `variant_unit_type_id` above.
 
+        // M10 Round 4 decoder type IDs.
+        //
+        // `bytes_decoded` — Sway `Bytes` shape.  Surfaces as a
+        // `ValueRecord::Sequence` with one `Int` element per byte.  The
+        // spec asks for `is_slice = true` (a memory-slice view of a
+        // heap-allocated byte buffer); the recorder requests it but the
+        // Rust -> Nim FFI drops the flag — same gap pinned in
+        // `tuple_decoding_test` / `array_fixed_test`.  The
+        // structural differentiation between `bytes_decoded`
+        // (Sway `Bytes`) and the byte-level `logd_payload` Sequence
+        // (raw LOGD buffer view) is preserved via the variable name.
+        // See `tests/test_tracer.rs::test_bytes_test_via_ct_print_full`.
+        let bytes_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "bytes_decoded");
+        // `identity_variant` — Sway `enum Identity { Address(b256),
+        // ContractId(b256) }` shape.  Surfaces as a
+        // `ValueRecord::Variant` whose discriminator name (`Address` or
+        // `ContractId`) matches the canonical Sway std variant names
+        // and whose inner contents is a 32-byte `b256` Sequence.  See
+        // `tests/test_tracer.rs::test_identity_address_contractid_test_via_ct_print_full`.
+        let identity_variant_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Variant, "identity_variant");
+        let identity_b256_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "identity_b256");
+        // `address_decoded` — Sway raw `Address` / `ContractId` /
+        // `AssetId` shapes.  Each surfaces as a 32-byte
+        // `ValueRecord::Sequence` (the canonical wire shape for these
+        // native identity primitives).  Like the b256 inner Sequence
+        // in `tuple_decoding_test`, the recorder requests
+        // `is_slice = true` but the FFI drops the flag.
+        let address_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "address_decoded");
+
         // Register the entry-point function.  For the Sway *script* shape
         // (the default) this is `main`; for the Sway *predicate* shape
         // this is `predicate`.  In both cases the function is merged
@@ -384,6 +417,22 @@ impl FuelRecorder {
         let mut emit_array_fixed_decoder = false;
         let mut emit_integer_widths_decoder = false;
         let mut emit_match_decoder = false;
+        // M10 Round 4 decoders.  Each is keyed off the ABI's
+        // `main.output.type` string so that adding a new shape never
+        // disturbs an existing fixture's emission contract:
+        //
+        //   * `Bytes`              -> `bytes_decoded` Sequence
+        //                             (one Int per byte, is_slice = true
+        //                             requested; FFI drops to false)
+        //   * `enum Identity`      -> `identity_variant` Variant
+        //                             (Address(b256) / ContractId(b256))
+        //   * `Address` / `ContractId` / `AssetId`
+        //                          -> `address_decoded` Sequence
+        //                             (32 Int elements; is_slice = true
+        //                             requested; FFI drops to false)
+        let mut emit_bytes_decoder = false;
+        let mut emit_identity_decoder = false;
+        let mut emit_address_decoder = false;
         if let Some(abi) = &self.abi {
             if let Some(out_type) = abi.function_output_type("main") {
                 let trimmed = out_type.trim();
@@ -401,6 +450,12 @@ impl FuelRecorder {
                     emit_integer_widths_decoder = true;
                 } else if trimmed == "enum Match" {
                     emit_match_decoder = true;
+                } else if trimmed == "Bytes" {
+                    emit_bytes_decoder = true;
+                } else if trimmed == "enum Identity" {
+                    emit_identity_decoder = true;
+                } else if trimmed == "Address" || trimmed == "ContractId" || trimmed == "AssetId" {
+                    emit_address_decoder = true;
                 }
             }
         }
@@ -1038,6 +1093,108 @@ impl FuelRecorder {
                     TraceWriter::register_variable_with_full_value(
                         &mut *writer,
                         "match_arm_variant",
+                        value,
+                    );
+                }
+
+                // ABI-driven `Bytes` decoder.  When the ABI declares
+                // the entry-point output as `Bytes` the recorder
+                // emits a `bytes_decoded` `ValueRecord::Sequence` whose
+                // elements are one `Int` per payload byte.  The
+                // recorder requests `is_slice = true` to mark the
+                // value as a slice/view of a heap-allocated byte
+                // buffer (the canonical Sway `Bytes` shape); the
+                // Rust -> Nim FFI today drops the flag and the value
+                // surfaces with `is_slice = false`.  Same FFI gap
+                // pinned in `tuple_decoding_test` / `array_fixed_test`.
+                // The structural differentiation between
+                // `bytes_decoded` (Sway `Bytes`) and the byte-level
+                // `logd_payload` Sequence (raw LOGD buffer view) is
+                // preserved via the variable name.
+                if emit_bytes_decoder {
+                    let elements: Vec<ValueRecord> = payload
+                        .iter()
+                        .map(|b| ValueRecord::Int {
+                            i: *b as i64,
+                            type_id: u64_type_id,
+                        })
+                        .collect();
+                    let value = ValueRecord::Sequence {
+                        elements,
+                        is_slice: true,
+                        type_id: bytes_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "bytes_decoded",
+                        value,
+                    );
+                }
+
+                // ABI-driven `enum Identity` decoder.  When the ABI
+                // declares the entry-point output as `enum Identity`
+                // the recorder decodes the LOGD payload as a
+                // tagged-union value: first byte = discriminator
+                // (0 = `Address`, 1 = `ContractId`), remaining 32
+                // bytes = the inner b256 payload.  The two
+                // discriminator names match the canonical Sway std
+                // `Identity` enum variant names so downstream tooling
+                // can recognise the Identity shape uniformly across
+                // recorders.
+                if emit_identity_decoder && payload.len() >= 33 {
+                    let b256_elements: Vec<ValueRecord> = payload[1..33]
+                        .iter()
+                        .map(|b| ValueRecord::Int {
+                            i: *b as i64,
+                            type_id: u64_type_id,
+                        })
+                        .collect();
+                    let inner = ValueRecord::Sequence {
+                        elements: b256_elements,
+                        is_slice: true,
+                        type_id: identity_b256_type_id,
+                    };
+                    let variant_name = match payload[0] {
+                        0 => "Address",
+                        1 => "ContractId",
+                        _ => "Unknown",
+                    };
+                    let value = ValueRecord::Variant {
+                        discriminator: variant_name.to_string(),
+                        contents: Box::new(inner),
+                        type_id: identity_variant_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "identity_variant",
+                        value,
+                    );
+                }
+
+                // ABI-driven `Address` / `ContractId` / `AssetId`
+                // decoder.  When the ABI declares the entry-point
+                // output as one of the Sway native identity primitives
+                // the recorder emits an `address_decoded`
+                // `ValueRecord::Sequence` with one `Int` per payload
+                // byte (the canonical 32-byte b256-style wire shape).
+                // The recorder requests `is_slice = true` (memory-view
+                // semantics); the FFI drops the flag — same gap.
+                if emit_address_decoder && payload.len() >= 32 {
+                    let elements: Vec<ValueRecord> = payload[..32]
+                        .iter()
+                        .map(|b| ValueRecord::Int {
+                            i: *b as i64,
+                            type_id: u64_type_id,
+                        })
+                        .collect();
+                    let value = ValueRecord::Sequence {
+                        elements,
+                        is_slice: true,
+                        type_id: address_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "address_decoded",
                         value,
                     );
                 }
