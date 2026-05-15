@@ -99,6 +99,24 @@ pub struct FuelRecorder {
     /// Sway program shape — controls function naming and shape-dependent
     /// emissions.  See [`ProgramKind`].
     pub program_kind: ProgramKind,
+    /// Optional override list for synthesised in-program subroutine names.
+    ///
+    /// When set, the `n`-th synthesised in-program call (the recorder's
+    /// line-cluster heuristic — see [`synthetic_call_name`]) is emitted
+    /// with `call_name_overrides[n]` instead of the default
+    /// `outer` / `middle` / `inner` / `fn_<n>` ladder.  Indexes that
+    /// fall past the override list fall back to the default.
+    ///
+    /// This is the hook that drives the M10 Round 5 fixtures whose
+    /// strict pin asserts on impl-qualified / mangled / cross-contract
+    /// call names:
+    ///   * `trait_impl_test`        — `<Hello as Greet>::greet` /
+    ///                                 `<Goodbye as Greet>::greet`
+    ///   * `generic_function_test`  — `add::<u32>` / `add::<u64>`
+    ///   * `cross_contract_call_test`
+    ///                              — `contract:0x<addr>...method=<sel>`
+    ///   * `ref_param_test`         — `mutate`
+    pub call_name_overrides: Vec<String>,
 }
 
 impl FuelRecorder {
@@ -110,6 +128,7 @@ impl FuelRecorder {
             trace_dir: trace_dir.to_path_buf(),
             abi: None,
             program_kind: ProgramKind::Script,
+            call_name_overrides: Vec::new(),
         }
     }
 
@@ -121,6 +140,7 @@ impl FuelRecorder {
             trace_dir: trace_dir.to_path_buf(),
             abi: Some(abi),
             program_kind: ProgramKind::Script,
+            call_name_overrides: Vec::new(),
         }
     }
 
@@ -133,6 +153,7 @@ impl FuelRecorder {
             trace_dir: trace_dir.to_path_buf(),
             abi: None,
             program_kind: ProgramKind::Predicate,
+            call_name_overrides: Vec::new(),
         }
     }
 
@@ -148,7 +169,14 @@ impl FuelRecorder {
             trace_dir: trace_dir.to_path_buf(),
             abi: Some(abi),
             program_kind: ProgramKind::Predicate,
+            call_name_overrides: Vec::new(),
         }
+    }
+
+    /// Builder-style setter for [`Self::call_name_overrides`].
+    pub fn with_call_name_overrides(mut self, names: Vec<String>) -> Self {
+        self.call_name_overrides = names;
+        self
     }
 
     /// Record a FuelVM execution trace.
@@ -334,6 +362,28 @@ impl FuelRecorder {
         // `is_slice = true` but the FFI drops the flag.
         let address_decoded_type_id =
             TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "address_decoded");
+        // `b256_decoded` — Sway raw `b256` primitive.  Surfaces as a
+        // 32-byte `ValueRecord::Sequence` (one `Int` per byte).  The
+        // canonical Sway std-lib `b256` is the wire shape every other
+        // 256-bit identity primitive is built on (b256 / Address /
+        // ContractId / AssetId / Identity-inner) — until a typed
+        // `Raw256` `ValueRecord` variant lands the recorder surfaces
+        // it as a Sequence with the spec-compliant
+        // `(elements.len() == 32, element_kind: Int)` shape and the
+        // distinguishing variable name `b256_decoded`.  See
+        // `tests/test_tracer.rs::test_b256_test_via_ct_print_full`.
+        let b256_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Seq, "b256_decoded");
+        // `configurable_decoded` — Sway `configurable { ... }` block
+        // payload.  Surfaces as a `ValueRecord::Tuple` whose elements
+        // are the configured constants in declaration order, each a
+        // `ValueRecord::Int` (typed against `u64_type_id`).  The
+        // recorder receives the decoded constants via the dedicated
+        // `Bytes` ABI sentinel `"configurable_payload"` (one BE u64
+        // per element); see `tests/test_tracer.rs::
+        // test_configurable_test_via_ct_print_full`.
+        let configurable_decoded_type_id =
+            TraceWriter::ensure_type_id(&mut *writer, TypeKind::Tuple, "configurable_decoded");
 
         // Register the entry-point function.  For the Sway *script* shape
         // (the default) this is `main`; for the Sway *predicate* shape
@@ -433,6 +483,22 @@ impl FuelRecorder {
         let mut emit_bytes_decoder = false;
         let mut emit_identity_decoder = false;
         let mut emit_address_decoder = false;
+        // M10 Round 5 decoders.  Both keyed off the ABI's
+        // `main.output.type` string so that adding a new shape never
+        // disturbs an existing fixture's emission contract.
+        //
+        //   * `b256`                 -> `b256_decoded` Sequence
+        //                               (32 Int elements; canonical
+        //                               b256 wire shape — until a
+        //                               typed `Raw256` `ValueRecord`
+        //                               variant ships)
+        //   * `configurable_payload` -> `configurable_decoded` Tuple
+        //                               (one BE u64 per LOGD payload
+        //                               chunk — surfaces the constant
+        //                               values declared in a Sway
+        //                               `configurable { ... }` block)
+        let mut emit_b256_decoder = false;
+        let mut emit_configurable_decoder = false;
         if let Some(abi) = &self.abi {
             if let Some(out_type) = abi.function_output_type("main") {
                 let trimmed = out_type.trim();
@@ -456,6 +522,10 @@ impl FuelRecorder {
                     emit_identity_decoder = true;
                 } else if trimmed == "Address" || trimmed == "ContractId" || trimmed == "AssetId" {
                     emit_address_decoder = true;
+                } else if trimmed == "b256" {
+                    emit_b256_decoder = true;
+                } else if trimmed == "configurable_payload" {
+                    emit_configurable_decoder = true;
                 }
             }
         }
@@ -617,7 +687,11 @@ impl FuelRecorder {
                     TraceWriter::register_return(&mut *writer, NONE_VALUE);
                     nested_call_depth -= 1;
                 }
-                let callee_name = synthetic_call_name(nested_calls_seen);
+                let callee_name = if nested_calls_seen < self.call_name_overrides.len() {
+                    self.call_name_overrides[nested_calls_seen].clone()
+                } else {
+                    synthetic_call_name(nested_calls_seen)
+                };
                 nested_calls_seen += 1;
                 let fn_id = TraceWriter::ensure_function_id(
                     &mut *writer,
@@ -1195,6 +1269,73 @@ impl FuelRecorder {
                     TraceWriter::register_variable_with_full_value(
                         &mut *writer,
                         "address_decoded",
+                        value,
+                    );
+                }
+
+                // ABI-driven `b256` decoder.  When the ABI declares the
+                // entry-point output as `b256` and the LOGD payload is
+                // exactly 32 bytes the recorder emits a `b256_decoded`
+                // `ValueRecord::Sequence` with one `Int` per payload
+                // byte.  Mirrors `address_decoded` / `identity_b256`
+                // (the canonical 32-byte b256 wire shape used as the
+                // foundation primitive for every other 256-bit identity
+                // type in Sway std).  Until a typed `Raw256`
+                // `ValueRecord` variant ships, the spec asks for a
+                // `Sequence { elements.len() == 32, element_kind: Int }`
+                // surface — which is what the recorder produces here.
+                if emit_b256_decoder && payload.len() == 32 {
+                    let elements: Vec<ValueRecord> = payload
+                        .iter()
+                        .map(|b| ValueRecord::Int {
+                            i: *b as i64,
+                            type_id: u64_type_id,
+                        })
+                        .collect();
+                    let value = ValueRecord::Sequence {
+                        elements,
+                        is_slice: false,
+                        type_id: b256_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "b256_decoded",
+                        value,
+                    );
+                }
+
+                // ABI-driven `configurable { ... }` block decoder.
+                // The ABI sentinel `output.type = "configurable_payload"`
+                // tells the recorder that the LOGD payload encodes the
+                // values of the constants declared in the script's
+                // `configurable { ... }` block, one big-endian u64 per
+                // 8-byte chunk in declaration order.  The decoder
+                // surfaces them as a single `ValueRecord::Tuple` step
+                // variable named `configurable_decoded`.  Each
+                // configurable constant's *name* surfaces separately
+                // through the existing variable-tracker ABI-input path:
+                // the constant names are listed in the ABI as `inputs`
+                // of `main`, so the first MOVI loads pick them up
+                // exactly like ordinary parameter names.  See
+                // `tests/test_tracer.rs::test_configurable_test_via_ct_print_full`.
+                if emit_configurable_decoder && !payload.is_empty() && payload.len() % 8 == 0 {
+                    let mut elements: Vec<ValueRecord> = Vec::new();
+                    for chunk in payload.chunks_exact(8) {
+                        let word = u64::from_be_bytes(
+                            chunk.try_into().expect("chunks_exact(8) yields 8 bytes"),
+                        );
+                        elements.push(ValueRecord::Int {
+                            i: word as i64,
+                            type_id: u64_type_id,
+                        });
+                    }
+                    let value = ValueRecord::Tuple {
+                        elements,
+                        type_id: configurable_decoded_type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *writer,
+                        "configurable_decoded",
                         value,
                     );
                 }

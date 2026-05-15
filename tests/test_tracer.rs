@@ -5806,3 +5806,1171 @@ fn test_hashing_test_via_ct_print_full() {
         "sha256 and keccak256 of the same input must differ"
     );
 }
+
+// ===========================================================================
+// M10 Round 5 fixtures
+//   b256 / trait_impl / generic_function / ref_param / inline_asm /
+//   configurable / cross_contract_call
+// ===========================================================================
+//
+// Round 5 lands the remaining M10 deliverables that pin Sway-level
+// surfaces invisible to the bytecode layer until the recorder grows
+// dedicated synthesis hooks:
+//
+//   * `b256_decoded`         Sequence (32 Int) — Sway raw `b256`
+//                             primitive; canonical wire shape under
+//                             every other 256-bit identity type
+//                             (Address / ContractId / AssetId /
+//                             Identity-inner)
+//   * `trait_impl_test`      synthesised in-program calls renamed via
+//                             `FuelRecorder::call_name_overrides` so
+//                             each impl method surfaces as a distinct
+//                             `register_call` with the impl-qualified
+//                             function name — `<Hello as Greet>::greet`
+//                             / `<Goodbye as Greet>::greet`
+//   * `generic_function_test`
+//                             same hook, mangled-name shape:
+//                             `add::<u32>` / `add::<u64>`
+//   * `ref_param_test`       same hook (single override `mutate`); pins
+//                             that the recorder tracks the referenced
+//                             value (r17) across the call boundary —
+//                             the `&mut` mutation surfaces as a step
+//                             variable update on the caller's local
+//                             between the call_entry step and a step
+//                             inside `mutate`
+//   * `inline_asm_test`      pure source-map fixture; pins that the
+//                             asm-block lines surface as their own
+//                             step events (NOT collapsed to the
+//                             enclosing function line) and that the
+//                             destination register snapshot carries
+//                             the literal value
+//   * `configurable_test`    ABI-driven decoder triggered by the
+//                             sentinel output type
+//                             `"configurable_payload"`; surfaces the
+//                             configurable constants as a single
+//                             `configurable_decoded` Tuple step
+//                             variable AND as individually-named
+//                             step variables (via the existing
+//                             ABI-inputs path)
+//   * `cross_contract_call_test`
+//                             same call_name_overrides hook;
+//                             surfaces a synthesised `register_call`
+//                             whose function name encodes both the
+//                             target contract address and the method
+//                             selector — the canonical M5 cross-contract
+//                             call surface
+
+// --- b256_test (Sway b256 -> ValueRecord::Sequence) -----------------------
+
+/// Build a bytecode program that constructs a 32-byte `b256` value on
+/// the heap with a recognisable byte sentinel pattern and emits its
+/// content via LOGD.  The ABI declares `output.type = "b256"`, which
+/// drives the recorder's `b256_decoded` Sequence decoder (registered
+/// alongside the existing `address_decoded` Sequence — see
+/// `recorder.rs::emit_b256_decoder`).
+///
+/// Bytecode layout (one instruction per source line):
+///
+/// ```text
+/// L1:  movi r16, 32                // total len = 32
+/// L2:  aloc r16                    // hp -= 32
+/// L3:  movi r17, 0xC0              // bytes[0] = 0xC0
+/// L4:  sb   hp, r17, 0
+/// L5:  movi r17, 0xDE              // bytes[1] = 0xDE
+/// L6:  sb   hp, r17, 1
+/// L7:  movi r17, 0x42              // bytes[31] = 0x42
+/// L8:  sb   hp, r17, 31
+/// L9:  logd zero, zero, hp, r16    // LOGD payload (32 bytes)
+/// L10: ret  RegId::ONE
+/// ```
+fn b256_test_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 32),                                  // L1
+        op::aloc(0x10),                                      // L2
+        op::movi(0x11, 0xC0),                                // L3
+        op::sb(RegId::HP, 0x11, 0),                          // L4
+        op::movi(0x11, 0xDE),                                // L5
+        op::sb(RegId::HP, 0x11, 1),                          // L6
+        op::movi(0x11, 0x42),                                // L7
+        op::sb(RegId::HP, 0x11, 31),                         // L8
+        op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x10), // L9
+        op::ret(RegId::ONE),                                 // L10
+    ]
+    .into_iter()
+    .collect()
+}
+
+const B256_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [],
+            "output": { "name": "", "type": "b256" }
+        }
+    ]
+}"#;
+
+#[test]
+fn test_b256_test_via_ct_print_full() {
+    let Some(doc) = record_with_abi_and_dump_full(
+        "test_b256_test_via_ct_print_full",
+        "b256_test",
+        b256_test_bytecode(),
+        B256_ABI_JSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_eq(&doc, "b256_test");
+
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main"]);
+
+    let counts = &doc["counts"];
+    // 11 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L10.
+    assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(1),
+        "one LOGD io_event; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 12, "11 steps + 1 io = 12 events");
+    assert_step_indices_monotonic(&doc);
+
+    assert_eq!(
+        observed_step_lines(&doc),
+        vec![1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "step lines must walk anchor + L1..L10 in order"
+    );
+
+    // ----- The b256_decoded Sequence MUST decode to the 32-byte value -
+    let b256_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("b256_decoded"))
+        .expect("b256_decoded variable must surface on a step event");
+    assert_eq!(
+        b256_var["value"]["kind"].as_str(),
+        Some("Sequence"),
+        "b256_decoded must decode as ValueRecord::Sequence; got {}",
+        b256_var["value"]
+    );
+    let elements = b256_var["value"]["elements"]
+        .as_array()
+        .expect("Sequence.elements array");
+    // Spec: until a typed Raw256 ValueRecord variant ships, the b256
+    // surfaces as a Sequence with `(elements.len() == 32, element_kind: Int)`.
+    assert_eq!(
+        elements.len(),
+        32,
+        "b256_decoded Sequence MUST have exactly 32 elements (b256 byte width)"
+    );
+    for (i, e) in elements.iter().enumerate() {
+        assert_eq!(
+            e["kind"].as_str(),
+            Some("Int"),
+            "b256_decoded element {i} must decode as Int (one per byte); got {e}"
+        );
+    }
+    let decoded: Vec<i64> = elements
+        .iter()
+        .map(|e| e["i"].as_i64().expect("Int.i must be i64"))
+        .collect();
+    let mut expected = vec![0i64; 32];
+    expected[0] = 0xC0;
+    expected[1] = 0xDE;
+    expected[31] = 0x42;
+    assert_eq!(
+        decoded, expected,
+        "b256_decoded byte view must mirror the 32-byte b256 sentinel pattern"
+    );
+}
+
+// --- trait_impl_test (impl-qualified function names) ----------------------
+
+/// Build a bytecode program whose synthetic source map carves it into
+/// two distinct line clusters so the recorder synthesises two
+/// in-program calls.  The bytecode itself models two trait-impl
+/// methods on different structs:
+///
+/// ```text
+/// <Hello as Greet>::greet (cluster L10..L11):
+///     r16 = 'H' as u32 = 72   // sentinel for the Hello impl
+///     log(r16)                 // emit a Receipt::Log carrying ra=72
+/// <Goodbye as Greet>::greet (cluster L20..L21):
+///     r17 = 'G' as u32 = 71   // sentinel for the Goodbye impl
+///     log(r17)                 // emit a Receipt::Log carrying ra=71
+/// ret
+/// ```
+fn trait_impl_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 72),              // L10: r16 = 'H' (Hello sentinel)
+        op::log(0x10, 0x00, 0x00, 0x00), // L11: log(r16)
+        op::movi(0x11, 71),              // L20: r17 = 'G' (Goodbye sentinel)
+        op::log(0x11, 0x00, 0x00, 0x00), // L21: log(r17)
+        op::ret(RegId::ONE),             // L22: ret
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Source map carving the bytecode into two trait-impl line clusters
+/// separated by a gap > `NESTED_CALL_LINE_GAP_THRESHOLD` (= 5) so the
+/// recorder synthesises two in-program calls — one per impl method.
+fn trait_impl_source_map(source_path: &PathBuf) -> SwaySourceMap {
+    let entries = vec![
+        (0, source_path.clone(), 10), // <Hello as Greet>::greet
+        (1, source_path.clone(), 11), // <Hello as Greet>::greet
+        (2, source_path.clone(), 20), // <Goodbye as Greet>::greet
+        (3, source_path.clone(), 21), // <Goodbye as Greet>::greet
+        (4, source_path.clone(), 22), // outer ret (closing the second impl)
+    ];
+    SwaySourceMap::from_line_mapping(entries)
+}
+
+#[test]
+fn test_trait_impl_test_via_ct_print_full() {
+    let Some(ct_print) = ct_print_or_skip("test_trait_impl_test_via_ct_print_full") else {
+        return;
+    };
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join("trait_impl_test.sw");
+    let bytecode = trait_impl_bytecode();
+    let source_map = trait_impl_source_map(&source_path);
+
+    let recorder = FuelRecorder::new("trait_impl_test", &out_dir).with_call_name_overrides(vec![
+        "<Hello as Greet>::greet".to_string(),
+        "<Goodbye as Greet>::greet".to_string(),
+    ]);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+
+    assert_metadata_program_eq(&doc, "trait_impl_test");
+
+    // ----- Function table: main + two impl-qualified entries ---------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "<Hello as Greet>::greet",
+            "<Goodbye as Greet>::greet"
+        ],
+        "functions table MUST contain main + the two impl-qualified \
+         function names (the recorder's call_name_overrides hook drives \
+         the synthesised in-program call naming)"
+    );
+
+    let counts = &doc["counts"];
+    // 6 step events: AbsoluteStep at L1 + 5 DeltaSteps for L10, L11,
+    // L20, L21, L22.
+    assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
+    // 2 synthesised in-program calls, one per trait impl method.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // 2 Receipt::Log io_events (one per log() call site).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 6 steps + 2 call_entry + 2 call_exit + 2 io = 12 events.
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Each impl method surfaces with the impl-qualified name ----
+    let call_entries: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert_eq!(
+        call_entries,
+        vec!["<Hello as Greet>::greet", "<Goodbye as Greet>::greet"],
+        "each trait-impl method must surface as its own register_call \
+         with the impl-qualified function name"
+    );
+}
+
+// --- generic_function_test (per-monomorphisation register_call) -----------
+
+/// Build a bytecode program whose synthetic source map carves it into
+/// two distinct line clusters — one per generic-function
+/// monomorphisation:
+///
+/// ```text
+/// add::<u32>(3, 4)  (cluster L10..L12):
+///     r16 = 3
+///     r17 = 4
+///     r18 = r16 + r17 = 7
+/// add::<u64>(100, 200)  (cluster L20..L22):
+///     r19 = 100
+///     r20 = 200
+///     r21 = r19 + r20 = 300
+/// ret
+/// ```
+fn generic_function_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 3),         // L10: a (u32) = 3
+        op::movi(0x11, 4),         // L11: b (u32) = 4
+        op::add(0x12, 0x10, 0x11), // L12: c = a + b = 7
+        op::movi(0x13, 100),       // L20: a (u64) = 100
+        op::movi(0x14, 200),       // L21: b (u64) = 200
+        op::add(0x15, 0x13, 0x14), // L22: c = a + b = 300
+        op::ret(RegId::ONE),       // L23: ret
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn generic_function_source_map(source_path: &PathBuf) -> SwaySourceMap {
+    let entries = vec![
+        (0, source_path.clone(), 10),
+        (1, source_path.clone(), 11),
+        (2, source_path.clone(), 12),
+        (3, source_path.clone(), 20),
+        (4, source_path.clone(), 21),
+        (5, source_path.clone(), 22),
+        (6, source_path.clone(), 23),
+    ];
+    SwaySourceMap::from_line_mapping(entries)
+}
+
+#[test]
+fn test_generic_function_test_via_ct_print_full() {
+    let Some(ct_print) = ct_print_or_skip("test_generic_function_test_via_ct_print_full") else {
+        return;
+    };
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join("generic_function_test.sw");
+    let bytecode = generic_function_bytecode();
+    let source_map = generic_function_source_map(&source_path);
+
+    let recorder = FuelRecorder::new("generic_function_test", &out_dir)
+        .with_call_name_overrides(vec!["add::<u32>".to_string(), "add::<u64>".to_string()]);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+
+    assert_metadata_program_eq(&doc, "generic_function_test");
+
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec!["main", "add::<u32>", "add::<u64>"],
+        "functions table MUST contain main + the two mangled \
+         monomorphisation names (the recorder's call_name_overrides \
+         hook drives the synthesised in-program call naming)"
+    );
+
+    let counts = &doc["counts"];
+    // 8 step events: AbsoluteStep at L1 + 7 DeltaSteps for L10..L12,
+    // L20..L22, L23.
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 2 call_entry + 2 call_exit = 12 events.
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    let call_entries: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert_eq!(
+        call_entries,
+        vec!["add::<u32>", "add::<u64>"],
+        "each monomorphisation MUST produce its own register_call with \
+         the mangled-name encoding"
+    );
+
+    // ----- Each monomorphisation MUST compute the expected sum -------
+    // The recorder emits step events BEFORE each instruction executes,
+    // so r18 = 3 + 4 = 7 surfaces at the NEXT step after the ADD (L20),
+    // and r21 = 100 + 200 = 300 surfaces at the NEXT step after the
+    // second ADD (L23).
+    let l20_step = events
+        .iter()
+        .find(|e| e["kind"] == "step" && e["line"] == 20)
+        .expect("step at L20 (post-add::<u32>)");
+    let l20_vars: std::collections::HashMap<String, i64> = l20_step["vars"]
+        .as_array()
+        .expect("vars array")
+        .iter()
+        .filter(|v| v["value"]["kind"].as_str() == Some("Int"))
+        .map(|v| {
+            (
+                v["varname"].as_str().unwrap().to_string(),
+                v["value"]["i"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        l20_vars.get("imm_3_plus_imm_4").copied(),
+        Some(7),
+        "add::<u32>(3, 4) MUST compute r18 = 7 (visible at L20, the \
+         step AFTER the ADD opcode executed); vars = {l20_vars:?}"
+    );
+    let l23_step = events
+        .iter()
+        .find(|e| e["kind"] == "step" && e["line"] == 23)
+        .expect("step at L23 (post-add::<u64>)");
+    let l23_vars: std::collections::HashMap<String, i64> = l23_step["vars"]
+        .as_array()
+        .expect("vars array")
+        .iter()
+        .filter(|v| v["value"]["kind"].as_str() == Some("Int"))
+        .map(|v| {
+            (
+                v["varname"].as_str().unwrap().to_string(),
+                v["value"]["i"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        l23_vars.get("imm_100_plus_imm_200").copied(),
+        Some(300),
+        "add::<u64>(100, 200) MUST compute r21 = 300 (visible at L23, \
+         the step AFTER the second ADD opcode executed); \
+         vars = {l23_vars:?}"
+    );
+}
+
+// --- ref_param_test (&mut T mutation visible across the call) -------------
+
+/// Build a bytecode program whose synthetic source map carves it into
+/// two distinct line clusters — caller (L1..L2) and callee `mutate`
+/// (L10..L11) — so the recorder synthesises one in-program call.  The
+/// callee mutates r17 from 10 to 99, modelling Sway's `&mut u64`
+/// reference-parameter mutation; the recorder's per-step register
+/// snapshot makes the mutation visible as a step variable update on
+/// the caller's tracked register across the call boundary.
+///
+/// ```text
+/// caller:
+///     r17 = 10           // L1: pre-call value of the &mut local
+///     log(r17)           // L2: anchor read (still 10)
+/// mutate (callee):
+///     r17 = 99           // L10: the &mut mutation
+///     log(r17)           // L11: anchor read (now 99)
+/// ret
+/// ```
+fn ref_param_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x11, 10),              // L1: caller r17 = 10
+        op::log(0x11, 0x00, 0x00, 0x00), // L2: caller log r17 = 10
+        op::movi(0x11, 99),              // L10: callee r17 = 99 (&mut mutation)
+        op::log(0x11, 0x00, 0x00, 0x00), // L11: callee log r17 = 99
+        op::ret(RegId::ONE),             // L12: ret
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn ref_param_source_map(source_path: &PathBuf) -> SwaySourceMap {
+    let entries = vec![
+        (0, source_path.clone(), 1),  // caller
+        (1, source_path.clone(), 2),  // caller
+        (2, source_path.clone(), 10), // callee mutate
+        (3, source_path.clone(), 11), // callee mutate
+        (4, source_path.clone(), 12), // ret
+    ];
+    SwaySourceMap::from_line_mapping(entries)
+}
+
+#[test]
+fn test_ref_param_test_via_ct_print_full() {
+    let Some(ct_print) = ct_print_or_skip("test_ref_param_test_via_ct_print_full") else {
+        return;
+    };
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join("ref_param_test.sw");
+    let bytecode = ref_param_bytecode();
+    let source_map = ref_param_source_map(&source_path);
+
+    let recorder = FuelRecorder::new("ref_param_test", &out_dir)
+        .with_call_name_overrides(vec!["mutate".to_string()]);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+
+    assert_metadata_program_eq(&doc, "ref_param_test");
+
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec!["main", "mutate"],
+        "functions table MUST contain main + the synthesised callee \
+         `mutate` (the recorder's call_name_overrides hook drives the \
+         in-program call naming)"
+    );
+
+    let counts = &doc["counts"];
+    // 6 step events: AbsoluteStep at L1 + DeltaSteps L1, L2, L10, L11, L12.
+    assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
+    // 1 synthesised in-program call (`mutate`).
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    // 2 Receipt::Log io_events (one per log() call).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 6 steps + 1 call_entry + 1 call_exit + 2 io = 10 events.
+    assert_eq!(events.len(), 10, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    let call_entries: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert_eq!(call_entries, vec!["mutate"]);
+
+    // ----- The recorder MUST track the referenced value across the call
+    // Pre-call (L2 inside the caller cluster) the tracked &mut local
+    // reads as 10; after the &mut mutation (L11 inside `mutate`) the
+    // SAME tracked register reads as 99.  This is the recorder's
+    // contract for &mut T parameters: the caller-visible register is
+    // kept in sync across the call boundary so the mutation surfaces
+    // as a step variable update.
+    let pre_step = events
+        .iter()
+        .find(|e| e["kind"] == "step" && e["line"] == 2)
+        .expect("caller step at L2 (anchor read of &mut local)");
+    let pre_vars: std::collections::HashMap<String, i64> = pre_step["vars"]
+        .as_array()
+        .expect("vars array")
+        .iter()
+        .filter(|v| v["value"]["kind"].as_str() == Some("Int"))
+        .map(|v| {
+            (
+                v["varname"].as_str().unwrap().to_string(),
+                v["value"]["i"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pre_vars.get("imm_10").copied(),
+        Some(10),
+        "pre-call (L2) r17 must read as 10 (caller-side &mut local); \
+         vars = {pre_vars:?}"
+    );
+
+    let post_step = events
+        .iter()
+        .find(|e| e["kind"] == "step" && e["line"] == 11)
+        .expect("callee step at L11 (anchor read after &mut mutation)");
+    let post_vars: std::collections::HashMap<String, i64> = post_step["vars"]
+        .as_array()
+        .expect("vars array")
+        .iter()
+        .filter(|v| v["value"]["kind"].as_str() == Some("Int"))
+        .map(|v| {
+            (
+                v["varname"].as_str().unwrap().to_string(),
+                v["value"]["i"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        post_vars.get("imm_99").copied(),
+        Some(99),
+        "post-mutation (L11) r17 must read as 99 (the &mut mutation \
+         is visible to the recorder's per-step register snapshot, so \
+         the mutation surfaces as a step variable update across the \
+         call boundary); vars = {post_vars:?}"
+    );
+
+    // ----- The two log io_events MUST carry the pre/post values ------
+    let io_events = observed_io_events(&doc);
+    assert_eq!(io_events.len(), 2);
+    let (kind0, text0) = &io_events[0];
+    assert_eq!(kind0, "ioStderr");
+    let ra0: u64 = text0
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("ra="))
+        .expect("Receipt::Log must include `ra=`")
+        .parse()
+        .expect("ra must parse as u64");
+    assert_eq!(
+        ra0, 10,
+        "pre-call log MUST carry ra=10 (the &mut local before mutation); \
+         text={text0}"
+    );
+    let (kind1, text1) = &io_events[1];
+    assert_eq!(kind1, "ioStderr");
+    let ra1: u64 = text1
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("ra="))
+        .expect("Receipt::Log must include `ra=`")
+        .parse()
+        .expect("ra must parse as u64");
+    assert_eq!(
+        ra1, 99,
+        "post-mutation log MUST carry ra=99 (the &mut local AFTER \
+         mutation, observed from inside `mutate`); text={text1}"
+    );
+}
+
+// --- inline_asm_test (asm { ... } block step events) ----------------------
+
+/// Build a bytecode program modelling a Sway function that wraps an
+/// inline `asm { ... }` block.  The synthetic source map maps the
+/// outer Sway lines (L1..L2 — the function header / prologue) and the
+/// asm-block inner lines (L3..L6 — one per asm-statement) to distinct
+/// source line numbers, all within `NESTED_CALL_LINE_GAP_THRESHOLD`
+/// (= 5) of each other so the entire run stays in a single function
+/// (no synthesised in-program call is created — the asm block is
+/// part of the enclosing function, not a callee).
+///
+/// The strict pin asserts that every asm-block instruction surfaces
+/// as its own step event (NOT collapsed into the enclosing function
+/// line) and that the destination register snapshot at the end of the
+/// asm block carries the literal value the asm assigned.
+///
+/// ```text
+/// L1:  movi r16, 1               // (Sway-side) prologue
+/// L2:  movi r17, 2               // (Sway-side) prologue
+/// L3:  movi r18, 42              // asm { r3: u64 = 42; ... }
+/// L4:  addi r19, r18, 100        // asm { r4: u64 = r3 + 100; ... }
+/// L5:  muli r20, r19, 2          // asm { r5: u64 = r4 * 2;   ... }
+/// L6:  log  r20                  // asm { log r5; }
+/// L7:  ret  RegId::ONE
+/// ```
+fn inline_asm_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 1),               // L1: Sway prologue
+        op::movi(0x11, 2),               // L2: Sway prologue
+        op::movi(0x12, 42),              // L3: asm r18 = 42
+        op::addi(0x13, 0x12, 100),       // L4: asm r19 = r18 + 100 = 142
+        op::muli(0x14, 0x13, 2),         // L5: asm r20 = r19 * 2   = 284
+        op::log(0x14, 0x00, 0x00, 0x00), // L6: asm log(r20)
+        op::ret(RegId::ONE),             // L7: ret
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[test]
+fn test_inline_asm_test_via_ct_print_full() {
+    let Some(doc) = record_bytecode_and_dump_full(
+        "test_inline_asm_test_via_ct_print_full",
+        "inline_asm_test",
+        inline_asm_bytecode(),
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_eq(&doc, "inline_asm_test");
+
+    // ----- Function table: main only (asm block is inline) -----------
+    // The asm block lives inside the enclosing Sway function, NOT as
+    // a separate callee — so no synthesised in-program calls are
+    // created.  The strict pin here asserts the asm-block is NOT
+    // promoted to its own register_call.
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec!["main"],
+        "asm block MUST NOT surface as a separate function — it's an \
+         inline expression inside `main`, not a callee"
+    );
+
+    let counts = &doc["counts"];
+    // 8 step events: AbsoluteStep at L1 + 7 DeltaSteps for L1..L7.
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    assert_eq!(
+        counts["calls"].as_u64(),
+        Some(0),
+        "asm block MUST NOT trigger any synthesised in-program call; \
+         counts={counts}"
+    );
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(1),
+        "one Receipt::Log from the asm-block log opcode; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 1 io = 9 events.
+    assert_eq!(events.len(), 9, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Strict pin: asm-block step events surface with line numbers
+    // landing INSIDE the asm block (NOT collapsed to the enclosing
+    // function line).  L3, L4, L5, L6 are the asm-inner lines; the
+    // recorder MUST emit a step event at each one.
+    let walk = observed_step_lines(&doc);
+    assert_eq!(
+        walk,
+        vec![1, 1, 2, 3, 4, 5, 6, 7],
+        "asm-block lines L3..L6 MUST surface as their own step events \
+         (the recorder must NOT collapse the asm block into the \
+          enclosing function's source line)"
+    );
+
+    // The asm-inner step lines MUST all be present individually.  Pin
+    // them explicitly so a regression that drops one asm-block step
+    // (e.g. an over-eager line-collapse heuristic) fails loudly.
+    for asm_line in [3, 4, 5, 6] {
+        assert_eq!(
+            walk.iter().filter(|&&l| l == asm_line).count(),
+            1,
+            "asm-block line L{asm_line} MUST surface as exactly one \
+             step event; walk = {walk:?}"
+        );
+    }
+
+    // ----- The destination register snapshot MUST carry the literal --
+    // At the asm-log step (L6) r20 has the final asm-computed value:
+    // r20 = (r18 + 100) * 2 = (42 + 100) * 2 = 284.
+    let l6_step = events
+        .iter()
+        .find(|e| e["kind"] == "step" && e["line"] == 6)
+        .expect("step at L6 (asm log)");
+    let l6_vars: std::collections::HashMap<String, i64> = l6_step["vars"]
+        .as_array()
+        .expect("vars array")
+        .iter()
+        .filter(|v| v["value"]["kind"].as_str() == Some("Int"))
+        .map(|v| {
+            (
+                v["varname"].as_str().unwrap().to_string(),
+                v["value"]["i"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        l6_vars.get("imm_42_plus_100_times_2").copied(),
+        Some(284),
+        "asm-block destination register r20 MUST carry the literal \
+         asm-computed value (42 + 100) * 2 = 284 at the asm-log step; \
+         vars = {l6_vars:?}"
+    );
+
+    // ----- The Receipt::Log io_event MUST also carry ra=284 ----------
+    let io_events = observed_io_events(&doc);
+    assert_eq!(io_events.len(), 1);
+    let (kind, text) = &io_events[0];
+    assert_eq!(kind, "ioStderr");
+    let ra: u64 = text
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("ra="))
+        .expect("Receipt::Log must include `ra=`")
+        .parse()
+        .expect("ra must parse as u64");
+    assert_eq!(
+        ra, 284,
+        "asm-block log MUST carry ra=284 (the asm-block destination \
+         register's value); text={text}"
+    );
+}
+
+// --- configurable_test (configurable { ... } block) -----------------------
+
+/// Build a bytecode program modelling a Sway script with a
+/// `configurable { FOO: u64 = 42; BAR: u64 = 84; }` block.  The
+/// configurable values are pre-loaded into r16 / r17 by MOVI
+/// instructions (Sway's lowering of constant `configurable` reads),
+/// then packed into a 16-byte LOGD payload that surfaces under the
+/// recorder's `configurable_payload` ABI sentinel as a single
+/// `configurable_decoded` Tuple step variable.
+///
+/// The variable-tracker independently picks up the configurable
+/// names from the ABI's `inputs` list, so the first two MOVIs
+/// surface as step variables named `FOO` and `BAR` instead of the
+/// generic `imm_42` / `imm_84` fallback.
+///
+/// ```text
+/// L1: movi r16, 42                       // FOO (configurable)
+/// L2: movi r17, 84                       // BAR (configurable)
+/// L3: movi r18, 16                       // logd len = 16
+/// L4: aloc r18                           // hp -= 16
+/// L5: sw   hp, r16, 0                    // hp[0..8]  = FOO  (BE u64)
+/// L6: sw   hp, r17, 1                    // hp[8..16] = BAR  (BE u64)
+/// L7: logd zero, zero, hp, r18           // LOGD 16 bytes
+/// L8: ret  RegId::ONE
+/// ```
+fn configurable_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 42),                                  // L1: FOO = 42
+        op::movi(0x11, 84),                                  // L2: BAR = 84
+        op::movi(0x12, 16),                                  // L3: len = 16
+        op::aloc(0x12),                                      // L4: hp -= 16
+        op::sw(RegId::HP, 0x10, 0),                          // L5: hp[0..8] = FOO
+        op::sw(RegId::HP, 0x11, 1),                          // L6: hp[8..16] = BAR
+        op::logd(RegId::ZERO, RegId::ZERO, RegId::HP, 0x12), // L7: LOGD 16 bytes
+        op::ret(RegId::ONE),                                 // L8: ret
+    ]
+    .into_iter()
+    .collect()
+}
+
+const CONFIGURABLE_ABI_JSON: &str = r#"{
+    "programType": "script",
+    "functions": [
+        {
+            "name": "main",
+            "inputs": [
+                { "name": "FOO", "type": "u64" },
+                { "name": "BAR", "type": "u64" }
+            ],
+            "output": { "name": "", "type": "configurable_payload" }
+        }
+    ]
+}"#;
+
+#[test]
+fn test_configurable_test_via_ct_print_full() {
+    let Some(doc) = record_with_abi_and_dump_full(
+        "test_configurable_test_via_ct_print_full",
+        "configurable_test",
+        configurable_bytecode(),
+        CONFIGURABLE_ABI_JSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_eq(&doc, "configurable_test");
+
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main"]);
+
+    let counts = &doc["counts"];
+    // 9 step events: AbsoluteStep at L1 + 8 DeltaSteps for L1..L8.
+    assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(1),
+        "one LOGD io_event; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 10, "9 steps + 1 io = 10 events");
+    assert_step_indices_monotonic(&doc);
+
+    assert_eq!(
+        observed_step_lines(&doc),
+        vec![1, 1, 2, 3, 4, 5, 6, 7, 8],
+        "step lines must walk anchor + L1..L8 in order"
+    );
+
+    // ----- Strict pin: each configurable surfaces as a typed local ---
+    // The variable-tracker resolves the first N MOVI loads against the
+    // ABI's `inputs` (here FOO at position 0, BAR at position 1) so
+    // r16 surfaces as FOO and r17 as BAR.  The recorder emits step
+    // events BEFORE each instruction executes, so the BAR (r17) value
+    // surfaces from L3 onward (one step AFTER the L2 MOVI ran); pin
+    // at L3 where both FOO and BAR have their post-load values.
+    let l3_step = events
+        .iter()
+        .find(|e| e["kind"] == "step" && e["line"] == 3)
+        .expect("step at L3 (post-binding of BAR)");
+    let l3_vars: std::collections::HashMap<String, i64> = l3_step["vars"]
+        .as_array()
+        .expect("vars array")
+        .iter()
+        .filter(|v| v["value"]["kind"].as_str() == Some("Int"))
+        .map(|v| {
+            (
+                v["varname"].as_str().unwrap().to_string(),
+                v["value"]["i"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        l3_vars.get("FOO").copied(),
+        Some(42),
+        "configurable FOO MUST surface as a typed local with value 42 \
+         at the configurable-binding step (L3, after the L1/L2 MOVIs \
+         have executed); vars = {l3_vars:?}"
+    );
+    assert_eq!(
+        l3_vars.get("BAR").copied(),
+        Some(84),
+        "configurable BAR MUST surface as a typed local with value 84 \
+         at the configurable-binding step (L3, after the L1/L2 MOVIs \
+         have executed); vars = {l3_vars:?}"
+    );
+
+    // ----- The configurable_decoded Tuple MUST surface on the LOGD step
+    let configurable_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"].as_str() == Some("configurable_decoded"))
+        .expect("configurable_decoded variable must surface on a step event");
+    assert_eq!(
+        configurable_var["value"]["kind"].as_str(),
+        Some("Tuple"),
+        "configurable_decoded must decode as ValueRecord::Tuple; got {}",
+        configurable_var["value"]
+    );
+    let elements = configurable_var["value"]["elements"]
+        .as_array()
+        .expect("Tuple.elements array");
+    assert_eq!(
+        elements.len(),
+        2,
+        "configurable_decoded MUST have exactly 2 elements (FOO, BAR)"
+    );
+    assert_eq!(
+        elements[0]["kind"].as_str(),
+        Some("Int"),
+        "configurable_decoded[0] (FOO) MUST decode as Int"
+    );
+    assert_eq!(
+        elements[0]["i"].as_i64(),
+        Some(42),
+        "configurable_decoded[0] (FOO) MUST equal 42"
+    );
+    assert_eq!(
+        elements[1]["kind"].as_str(),
+        Some("Int"),
+        "configurable_decoded[1] (BAR) MUST decode as Int"
+    );
+    assert_eq!(
+        elements[1]["i"].as_i64(),
+        Some(84),
+        "configurable_decoded[1] (BAR) MUST equal 84"
+    );
+}
+
+// --- cross_contract_call_test (target contract addr + method selector) ----
+
+/// Build a bytecode program modelling a script that issues a single
+/// `abi(MyContract, addr).method()` call: outer caller cluster
+/// (L1..L2) + a synthesised callee cluster (L10..L11) representing
+/// the entry into the cross-contract callee.  The recorder's
+/// `call_name_overrides` hook drives the synthesised call name to
+/// encode both the target contract address and the method selector
+/// — the canonical M5 cross-contract call surface ("`contract:<addr>...
+/// method=<sel>`").
+///
+/// ```text
+/// caller (L1..L2):
+///     r16 = 0xDEADBEEF                  // callee selector sentinel
+///     log(r16)                          // pre-call anchor
+/// callee (L10..L11):
+///     r17 = 7                           // callee body
+///     log(r17)                          // callee log
+/// ret
+/// ```
+fn cross_contract_call_bytecode() -> Vec<u8> {
+    vec![
+        op::movi(0x10, 0x4242),          // L1: caller selector sentinel
+        op::log(0x10, 0x00, 0x00, 0x00), // L2: pre-call log
+        op::movi(0x11, 7),               // L10: callee body
+        op::log(0x11, 0x00, 0x00, 0x00), // L11: callee log
+        op::ret(RegId::ONE),             // L12: ret
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn cross_contract_call_source_map(source_path: &PathBuf) -> SwaySourceMap {
+    let entries = vec![
+        (0, source_path.clone(), 1),  // caller
+        (1, source_path.clone(), 2),  // caller
+        (2, source_path.clone(), 10), // callee (cross-contract entry)
+        (3, source_path.clone(), 11), // callee
+        (4, source_path.clone(), 12), // ret
+    ];
+    SwaySourceMap::from_line_mapping(entries)
+}
+
+#[test]
+fn test_cross_contract_call_test_via_ct_print_full() {
+    let Some(ct_print) = ct_print_or_skip("test_cross_contract_call_test_via_ct_print_full") else {
+        return;
+    };
+
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = temp_dir.path().join("traces");
+    let source_path = temp_dir.path().join("cross_contract_call_test.sw");
+    let bytecode = cross_contract_call_bytecode();
+    let source_map = cross_contract_call_source_map(&source_path);
+
+    // The synthesised callee name encodes both the target contract
+    // address and the method selector — the canonical M5 cross-contract
+    // call surface.  Pin the EXACT string so any drift in the encoding
+    // fails this test loudly rather than silently changing the
+    // downstream-tooling contract.
+    let expected_callee = "contract:0xabcdef0123456789...method=0xdeadbeef";
+    let recorder = FuelRecorder::new("cross_contract_call_test", &out_dir)
+        .with_call_name_overrides(vec![expected_callee.to_string()]);
+    recorder
+        .record(bytecode, &source_map, &source_path)
+        .expect("recording should succeed");
+
+    let ct_files = ct_files_in(&out_dir);
+    assert!(!ct_files.is_empty(), "expected a .ct container");
+
+    let output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("ct-print");
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    drop(temp_dir);
+
+    assert_metadata_program_eq(&doc, "cross_contract_call_test");
+
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec!["main", expected_callee],
+        "functions table MUST contain main + the synthesised callee \
+         name encoding both the target contract addr and the method \
+         selector"
+    );
+
+    let counts = &doc["counts"];
+    // 6 step events: AbsoluteStep at L1 + 5 DeltaSteps for L1, L2, L10,
+    // L11, L12.
+    assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 6 steps + 1 call_entry + 1 call_exit + 2 io = 10 events.
+    assert_eq!(events.len(), 10, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    let call_entries: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert_eq!(
+        call_entries,
+        vec![expected_callee],
+        "the cross-contract call MUST surface as a single register_call \
+         whose function name encodes the target contract addr + method \
+         selector"
+    );
+
+    // ----- The pre-call log MUST carry the caller-side selector -------
+    let io_events = observed_io_events(&doc);
+    assert_eq!(io_events.len(), 2);
+    let (_, text0) = &io_events[0];
+    let ra0: u64 = text0
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("ra="))
+        .expect("Receipt::Log must include `ra=`")
+        .parse()
+        .expect("ra must parse as u64");
+    assert_eq!(
+        ra0, 0x4242,
+        "pre-call log MUST carry the caller-side selector sentinel; \
+         text={text0}"
+    );
+    let (_, text1) = &io_events[1];
+    let ra1: u64 = text1
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("ra="))
+        .expect("Receipt::Log must include `ra=`")
+        .parse()
+        .expect("ra must parse as u64");
+    assert_eq!(
+        ra1, 7,
+        "callee log MUST carry the callee-body sentinel value 7; \
+         text={text1}"
+    );
+}
