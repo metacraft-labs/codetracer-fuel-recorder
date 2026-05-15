@@ -3128,24 +3128,17 @@ fn test_tuple_decoding_test_via_ct_print_full() {
         "b256 must have exactly 32 bytes; got {}",
         b256_bytes.len()
     );
-    // Differentiation note: the recorder sets `is_slice = true` for
-    // the b256 inner Sequence (semantically a memory-slice view,
-    // distinct from the heap-owned `vec_dynamic` Sequence which the
-    // recorder sets to `is_slice = false`).  However, the current
-    // Rust -> Nim FFI for `ct_value_begin_sequence` does not forward
-    // the `is_slice` flag — it always lands as `false` in the encoded
-    // CBOR.  The structural differentiation (top-level `vec_dynamic`
-    // Sequence vs nested b256 Sequence inside the Tuple) and the
-    // naming convention preserve the spec-level distinction while the
-    // FFI plumbing catches up.
+    // The recorder sets `is_slice = true` for the b256 inner Sequence
+    // (semantically a memory-slice view, distinct from the heap-owned
+    // `vec_dynamic` Sequence which the recorder sets to
+    // `is_slice = false`).  The Rust -> Nim FFI now threads the flag
+    // through `ct_value_begin_sequence_with_slice`, so the recorded
+    // CBOR carries the discriminator end-to-end.
     assert_eq!(
         elements[1]["is_slice"].as_bool(),
-        Some(false),
-        "b256 Sequence is_slice surfaces as false today (FFI gap; the \
-         recorder requests is_slice = true but the Rust -> Nim FFI \
-         drops the flag).  The differentiation between vec_dynamic \
-         and slice/view Sequences is preserved structurally (top-level \
-         vs nested) and via naming."
+        Some(true),
+        "b256 Sequence must surface as is_slice = true (recorder pins \
+         the b256 inner Sequence to slice/view semantics)"
     );
     assert_eq!(
         b256_bytes[0]["i"].as_i64(),
@@ -3315,16 +3308,14 @@ fn test_enum_tagged_union_test_via_ct_print_full() {
         b"FAILED!!".to_vec(),
         "Failure inner payload must decode to the ASCII bytes FAILED!!"
     );
-    // See the note on `b256_inner is_slice` in
-    // `test_tuple_decoding_test_via_ct_print_full` — the FFI drops
-    // the `is_slice` flag, so this surfaces as `false` even though
-    // the recorder requested `true`.  Pin the actual surfaced value
-    // to keep the test strict.
+    // The FFI now threads `is_slice` through, so the str[8] inner
+    // Sequence (recorder marks it as a slice/view of memory) lands as
+    // `is_slice = true` in the CBOR.
     assert_eq!(
         failure_var["value"]["contents"]["is_slice"].as_bool(),
-        Some(false),
-        "Failure inner str[8] Sequence is_slice surfaces as false \
-         (FFI gap — see the note in tuple_decoding_test for context)"
+        Some(true),
+        "Failure inner str[8] Sequence must surface as is_slice = true \
+         (recorder pins str[8] payload to slice/view semantics)"
     );
 
     let Some(doc_skipped) = record_variant_and_dump_full(
@@ -3810,9 +3801,9 @@ fn test_array_fixed_test_via_ct_print_full() {
     //   * `logd_payload`  Sequence (byte-level)
     //   * `logd_struct`   Struct  (4 BE u64 fields)
     //   * `vec_dynamic`   Sequence (4 Int elements, is_slice = false)
-    //   * `array_fixed`   Sequence (4 Int elements, is_slice = false
-    //                       in the encoded CBOR — the recorder
-    //                       requests `is_slice = true`, dropped by FFI)
+    //   * `array_fixed`   Sequence (4 Int elements, is_slice = true —
+    //                       fixed-width memory-slice view, distinct
+    //                       from `vec_dynamic`'s heap-owned shape)
     // Plus per-register Int.
     let kinds: std::collections::BTreeSet<String> = events
         .iter()
@@ -3869,19 +3860,16 @@ fn test_array_fixed_test_via_ct_print_full() {
         "array_fixed elements must match the Sway `let xs: [u64; 4] = \
          [1, 2, 3, 4];` initialisation"
     );
-    // FFI gap: the recorder requests `is_slice = true` but the
-    // Rust -> Nim FFI for `ct_value_begin_sequence` drops the flag,
-    // so it lands as `false` in the encoded CBOR.  The structural
-    // differentiation between fixed-length and dynamic vectors is
-    // preserved via the `array_fixed` vs `vec_dynamic` naming.  Same
-    // gap pinned in `test_tuple_decoding_test_via_ct_print_full`.
+    // The FFI now threads `is_slice` end-to-end via
+    // `ct_value_begin_sequence_with_slice`, so the fixed-length array
+    // surfaces with the slice/view discriminator the recorder requests
+    // (distinct from `vec_dynamic`, the heap-owned dynamic vector).
     assert_eq!(
         array_fixed_var["value"]["is_slice"].as_bool(),
-        Some(false),
-        "array_fixed Sequence is_slice surfaces as false today (FFI \
-         gap; the recorder requests is_slice = true but the Rust -> \
-         Nim FFI drops the flag).  The differentiation between \
-         array_fixed and vec_dynamic is preserved via naming."
+        Some(true),
+        "array_fixed Sequence must surface as is_slice = true (recorder \
+         pins fixed-length arrays to slice/view semantics, distinct \
+         from heap-owned `vec_dynamic`)"
     );
 
     // ----- Per-step element-count walk --------------------------------
@@ -4900,21 +4888,16 @@ fn test_bytes_test_via_ct_print_full() {
         vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42],
         "bytes_decoded elements must match the 5-byte literal"
     );
-    // FFI gap: the recorder requests `is_slice = true` (Sway `Bytes`
-    // is semantically a memory-slice view of a heap-allocated byte
-    // buffer) but the Rust -> Nim FFI for `ct_value_begin_sequence`
-    // drops the flag, so the value lands as `is_slice = false` in
-    // the encoded CBOR.  Same gap pinned in
-    // `tuple_decoding_test` / `array_fixed_test`.  The structural
-    // differentiation between `bytes_decoded` (Sway `Bytes`) and the
-    // byte-level `logd_payload` Sequence (raw LOGD buffer view) is
-    // preserved via the variable name.
+    // The recorder requests `is_slice = true` for `bytes_decoded`
+    // (Sway `Bytes` is semantically a memory-slice view of a
+    // heap-allocated byte buffer) and the Rust -> Nim FFI now threads
+    // the flag through `ct_value_begin_sequence_with_slice`, so the
+    // value surfaces with the slice/view discriminator end-to-end.
     assert_eq!(
         bytes_var["value"]["is_slice"].as_bool(),
-        Some(false),
-        "bytes_decoded Sequence is_slice surfaces as false today (FFI \
-         gap; the recorder requests is_slice = true).  The differentiation \
-         between bytes_decoded and logd_payload is preserved via naming."
+        Some(true),
+        "bytes_decoded Sequence must surface as is_slice = true \
+         (recorder pins Sway `Bytes` to slice/view semantics)"
     );
 
     // ----- The byte-level `logd_payload` Sequence MUST also surface ---
@@ -5106,9 +5089,10 @@ fn test_identity_address_contractid_test_via_ct_print_full() {
     }
     assert_eq!(
         addr_var["value"]["contents"]["is_slice"].as_bool(),
-        Some(false),
-        "identity_variant inner b256 is_slice surfaces as false today \
-         (FFI gap — see the note in tuple_decoding_test for context)"
+        Some(true),
+        "identity_variant inner b256 must surface as is_slice = true \
+         (recorder pins b256 inside the Identity variant to slice/view \
+         semantics)"
     );
 
     // ----- Identity::ContractId(b256) ------------------------------------
@@ -5188,8 +5172,9 @@ fn test_identity_address_contractid_test_via_ct_print_full() {
     );
     assert_eq!(
         raw_addr_var["value"]["is_slice"].as_bool(),
-        Some(false),
-        "address_decoded is_slice surfaces as false today (FFI gap)"
+        Some(true),
+        "address_decoded must surface as is_slice = true (recorder \
+         pins raw b256 Address payload to slice/view semantics)"
     );
 
     // ----- raw ContractId — same shape, distinct ABI ---------------------
