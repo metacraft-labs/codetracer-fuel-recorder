@@ -1602,13 +1602,13 @@ fn test_env_out_dir_used_when_flag_omitted() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // The placeholder Sway-project path writes trace_metadata.json
-    // into the resolved out-dir.  The env-var must have been the
-    // fallback (since --out-dir was omitted).
+    // The placeholder Sway-project path no longer writes JSON sidecars
+    // — the legacy `trace_metadata.json` / `trace_paths.json` placeholders
+    // were retired with the v3 CTFS rollout (follow-up #254 phase 2).
+    // The env-var-supplied output dir must still have been created.
     assert!(
-        env_out_dir.join("trace_metadata.json").exists(),
-        "expected the env-supplied output dir {:?} to receive the placeholder \
-         trace_metadata.json",
+        env_out_dir.exists(),
+        "expected the env-supplied output dir {:?} to be created",
         env_out_dir
     );
 }

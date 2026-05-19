@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use fuel_asm::{op, RegId};
+use fuel_asm::{RegId, op};
 
 use codetracer_fuel_recorder::abi_decoder::AbiSchema;
 use codetracer_fuel_recorder::interpreter::StepState;
@@ -115,7 +115,10 @@ fn test_abi_enrichment() {
     let vars1 = tracker.process_step(&step1);
 
     assert_eq!(vars1.len(), 1);
-    assert_eq!(vars1[0].name, "amount", "first MOVI should use ABI param name 'amount'");
+    assert_eq!(
+        vars1[0].name, "amount",
+        "first MOVI should use ABI param name 'amount'"
+    );
 
     // Second MOVI should get the second param name "price"
     regs[0x11] = 50;
@@ -123,7 +126,10 @@ fn test_abi_enrichment() {
     let vars2 = tracker.process_step(&step2);
 
     assert_eq!(vars2.len(), 1);
-    assert_eq!(vars2[0].name, "price", "second MOVI should use ABI param name 'price'");
+    assert_eq!(
+        vars2[0].name, "price",
+        "second MOVI should use ABI param name 'price'"
+    );
 
     // Third MOVI should fall back to heuristic (no more ABI params)
     regs[0x12] = 7;
@@ -131,7 +137,10 @@ fn test_abi_enrichment() {
     let vars3 = tracker.process_step(&step3);
 
     assert_eq!(vars3.len(), 1);
-    assert_eq!(vars3[0].name, "imm_7", "third MOVI should fall back to heuristic name");
+    assert_eq!(
+        vars3[0].name, "imm_7",
+        "third MOVI should fall back to heuristic name"
+    );
 
     // ADD should use enriched names
     regs[0x13] = 150;
@@ -178,13 +187,25 @@ fn test_abi_parsing() {
 
     let transfer_params = abi.function_params("transfer");
     assert_eq!(transfer_params.len(), 3);
-    assert_eq!(transfer_params[0], ("recipient".to_string(), "Address".to_string()));
-    assert_eq!(transfer_params[1], ("amount".to_string(), "u64".to_string()));
-    assert_eq!(transfer_params[2], ("asset_id".to_string(), "ContractId".to_string()));
+    assert_eq!(
+        transfer_params[0],
+        ("recipient".to_string(), "Address".to_string())
+    );
+    assert_eq!(
+        transfer_params[1],
+        ("amount".to_string(), "u64".to_string())
+    );
+    assert_eq!(
+        transfer_params[2],
+        ("asset_id".to_string(), "ContractId".to_string())
+    );
 
     let balance_params = abi.function_params("balance");
     assert_eq!(balance_params.len(), 1);
-    assert_eq!(balance_params[0], ("account".to_string(), "Address".to_string()));
+    assert_eq!(
+        balance_params[0],
+        ("account".to_string(), "Address".to_string())
+    );
 
     // Non-existent function returns empty
     let missing = abi.function_params("nonexistent");
@@ -198,11 +219,11 @@ fn test_abi_parsing() {
 fn test_full_pipeline_with_tracker() {
     // Build the same arithmetic bytecode used in test_tracer.rs
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 10),             // r16 = 10
-        op::movi(0x11, 32),             // r17 = 32
-        op::add(0x12, 0x10, 0x11),      // r18 = r16 + r17 = 42
-        op::muli(0x13, 0x12, 2),        // r19 = r18 * 2 = 84
-        op::add(0x14, 0x13, 0x10),      // r20 = r19 + r16 = 94
+        op::movi(0x10, 10),        // r16 = 10
+        op::movi(0x11, 32),        // r17 = 32
+        op::add(0x12, 0x10, 0x11), // r18 = r16 + r17 = 42
+        op::muli(0x13, 0x12, 2),   // r19 = r18 * 2 = 84
+        op::add(0x14, 0x13, 0x10), // r20 = r19 + r16 = 94
         op::log(0x14, 0x00, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -243,14 +264,19 @@ fn test_full_pipeline_with_tracker() {
 
     // Verify .ct output.
     let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
-        .unwrap().filter_map(|e| e.ok()).map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "ct")).collect();
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+        .collect();
     assert!(!ct_files.is_empty(), "expected .ct file");
     let ct_content = std::fs::read(&ct_files[0]).unwrap();
     assert!(ct_content.len() >= 5 && ct_content[..5] == [0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
     // Event checks deferred until CTFS reader available.
     let events: Vec<serde_json::Value> = vec![];
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
 
     // Collect all variable names from the trace
     let var_names: Vec<String> = events

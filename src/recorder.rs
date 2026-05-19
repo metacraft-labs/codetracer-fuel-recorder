@@ -200,15 +200,9 @@ impl FuelRecorder {
         // from the `.bin` extension.  No JSON / legacy-binary alternative
         // is exposed.
         let events_path = self.trace_dir.join("trace.bin");
-        let metadata_path = self.trace_dir.join("trace_metadata.json");
-        let paths_path = self.trace_dir.join("trace_paths.json");
 
         // Initialize trace files
         TraceWriter::begin_writing_trace_events(&mut *writer, &events_path)
-            .map_err(|e| eyre::eyre!("{e}"))?;
-        TraceWriter::begin_writing_trace_metadata(&mut *writer, &metadata_path)
-            .map_err(|e| eyre::eyre!("{e}"))?;
-        TraceWriter::begin_writing_trace_paths(&mut *writer, &paths_path)
             .map_err(|e| eyre::eyre!("{e}"))?;
 
         // Start the trace
@@ -1427,8 +1421,9 @@ impl FuelRecorder {
 
         // Finish writing
         TraceWriter::finish_writing_trace_events(&mut *writer).map_err(|e| eyre::eyre!("{e}"))?;
-        TraceWriter::finish_writing_trace_metadata(&mut *writer).map_err(|e| eyre::eyre!("{e}"))?;
-        TraceWriter::finish_writing_trace_paths(&mut *writer).map_err(|e| eyre::eyre!("{e}"))?;
+        writer
+            .write_meta_dat("codetracer-fuel-recorder")
+            .map_err(|e| eyre::eyre!("{e}"))?;
         writer.close().map_err(|e| eyre::eyre!("{e}"))?;
 
         Ok(())

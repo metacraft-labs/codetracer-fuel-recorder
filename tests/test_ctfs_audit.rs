@@ -25,7 +25,7 @@
 
 use std::path::PathBuf;
 
-use fuel_asm::{op, RegId};
+use fuel_asm::{RegId, op};
 
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;

@@ -33,13 +33,13 @@ fn make_call_receipt(from: ContractId, to: ContractId) -> Receipt {
     Receipt::call(
         from,
         to,
-        0,                   // amount
-        AssetId::zeroed(),   // asset_id
-        1_000_000,           // gas
-        0,                   // param1
-        0,                   // param2
-        0,                   // pc
-        0,                   // is
+        0,                 // amount
+        AssetId::zeroed(), // asset_id
+        1_000_000,         // gas
+        0,                 // param1
+        0,                 // param2
+        0,                 // pc
+        0,                 // is
     )
 }
 
@@ -202,7 +202,10 @@ fn test_nested_cross_contract() {
     assert_eq!(switches.len(), 1);
     assert_eq!(tracker.call_depth(), 1);
     assert_eq!(tracker.current_contract_id(), &ContractId::zeroed());
-    assert_eq!(tracker.current_execution_context(), ExecutionContext::Script);
+    assert_eq!(
+        tracker.current_execution_context(),
+        ExecutionContext::Script
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +218,10 @@ fn test_predicate_context() {
 
     // Initially not in predicate
     assert!(!tracker.is_predicate());
-    assert_eq!(tracker.current_execution_context(), ExecutionContext::Script);
+    assert_eq!(
+        tracker.current_execution_context(),
+        ExecutionContext::Script
+    );
 
     // Enter predicate mode
     tracker.enter_predicate();
@@ -236,7 +242,10 @@ fn test_predicate_context() {
     // Exit predicate mode
     tracker.exit_predicate();
     assert!(!tracker.is_predicate());
-    assert_eq!(tracker.current_execution_context(), ExecutionContext::Script);
+    assert_eq!(
+        tracker.current_execution_context(),
+        ExecutionContext::Script
+    );
     assert_eq!(tracker.call_depth(), 1);
 
     // Can enter and exit predicate multiple times
@@ -351,7 +360,8 @@ fn test_graphql_debug_api_types() {
     assert!(config.endpoint.contains("localhost"));
     assert!(config.endpoint.contains("4000"));
 
-    let custom_config = GraphQLDebugConfig::with_endpoint("https://mainnet.fuel.network/v1/graphql");
+    let custom_config =
+        GraphQLDebugConfig::with_endpoint("https://mainnet.fuel.network/v1/graphql");
     assert_eq!(
         custom_config.endpoint,
         "https://mainnet.fuel.network/v1/graphql"
