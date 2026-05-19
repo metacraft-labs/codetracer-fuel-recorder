@@ -116,9 +116,7 @@ fn test_parse_transaction_response() {
 
     // Verify input types
     match &tx_data.inputs[0] {
-        TransactionInput::InputCoin {
-            owner, amount, ..
-        } => {
+        TransactionInput::InputCoin { owner, amount, .. } => {
             assert_eq!(owner.as_deref(), Some("0xowner1"));
             assert_eq!(amount.as_deref(), Some("1000000"));
         }
@@ -176,7 +174,10 @@ fn test_parse_contract_bytecode_response() {
     assert!(!result.bytecode.is_empty());
     assert!(result.bytecode.starts_with("0x"));
     // The bytecode string includes the "0x" prefix + hex chars
-    assert!(result.bytecode.len() > 4, "bytecode should contain hex data");
+    assert!(
+        result.bytecode.len() > 4,
+        "bytecode should contain hex data"
+    );
 }
 
 #[test]
@@ -239,10 +240,7 @@ fn test_dry_run_response_parsing() {
     assert_eq!(result.receipts[1].receipt_type, "LOG");
     assert_eq!(result.receipts[2].receipt_type, "RETURN");
     assert_eq!(result.receipts[3].receipt_type, "SCRIPT_RESULT");
-    assert_eq!(
-        result.program_state.as_deref(),
-        Some("0x0000000000000001")
-    );
+    assert_eq!(result.program_state.as_deref(), Some("0x0000000000000001"));
 }
 
 #[test]
@@ -530,10 +528,7 @@ fn test_missing_source_graceful_fallback() {
     let summary = ReplaySummary {
         tx_id: "0xno_source_tx".to_string(),
         block_height: Some(99999),
-        contract_ids: vec![
-            "0xcontract_a".to_string(),
-            "0xcontract_b".to_string(),
-        ],
+        contract_ids: vec!["0xcontract_a".to_string(), "0xcontract_b".to_string()],
         contracts_with_bytecode: 2,
         has_source_maps: false,
         dry_run_receipts: 5,
@@ -573,11 +568,13 @@ fn test_missing_source_graceful_fallback() {
 fn test_parse_transaction_response_no_data() {
     let response = GraphQLResponse {
         data: None,
-        errors: Some(vec![codetracer_fuel_recorder::graphql_debug::GraphQLError {
-            message: "transaction not found".to_string(),
-            locations: None,
-            path: None,
-        }]),
+        errors: Some(vec![
+            codetracer_fuel_recorder::graphql_debug::GraphQLError {
+                message: "transaction not found".to_string(),
+                locations: None,
+                path: None,
+            },
+        ]),
     };
 
     let result = parse_transaction_response(&response);
@@ -686,7 +683,11 @@ fn test_output_types_parsing() {
         _ => panic!("expected ContractCreated"),
     }
 
-    assert!(matches!(&tx_data.outputs[2], TransactionOutput::Unknown), "expected outputs[2] to be TransactionOutput::Unknown, got {:?}", &tx_data.outputs[2]);
+    assert!(
+        matches!(&tx_data.outputs[2], TransactionOutput::Unknown),
+        "expected outputs[2] to be TransactionOutput::Unknown, got {:?}",
+        &tx_data.outputs[2]
+    );
 }
 
 #[test]

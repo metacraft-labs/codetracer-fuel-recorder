@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eyre::{eyre, Context, Result};
+use eyre::{Context, Result, eyre};
 use serde::{Deserialize, Serialize};
 
 use crate::graphql_debug::{GraphQLRequest, GraphQLResponse};

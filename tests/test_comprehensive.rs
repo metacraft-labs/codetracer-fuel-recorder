@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use fuel_asm::{op, RegId};
+use fuel_asm::{RegId, op};
 
 use codetracer_fuel_recorder::interpreter::{FuelInterpreter, StepState};
 use codetracer_fuel_recorder::recorder::FuelRecorder;
@@ -43,8 +43,11 @@ fn record_and_parse(bytecode: &[u8]) -> (tempfile::TempDir, Vec<serde_json::Valu
 
     // Verify .ct output with CTFS magic bytes.
     let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
-        .unwrap().filter_map(|e| e.ok()).map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "ct")).collect();
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+        .collect();
     assert!(!ct_files.is_empty(), "expected .ct file");
     let content = std::fs::read(&ct_files[0]).unwrap();
     assert!(content.len() >= 5 && content[..5] == [0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
@@ -112,13 +115,13 @@ fn count_returns(events: &[serde_json::Value]) -> usize {
 #[test]
 fn test_arithmetic_register_ops() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 10),        // r16 = 10
-        op::movi(0x11, 20),        // r17 = 20
-        op::add(0x12, 0x10, 0x11), // r18 = 10 + 20 = 30
-        op::sub(0x13, 0x11, 0x10), // r19 = 20 - 10 = 10
-        op::mul(0x14, 0x10, 0x11), // r20 = 10 * 20 = 200
-        op::div(0x15, 0x11, 0x10), // r21 = 20 / 10 = 2
-        op::mod_(0x16, 0x11, 0x10), // r22 = 20 % 10 = 0
+        op::movi(0x10, 10),              // r16 = 10
+        op::movi(0x11, 20),              // r17 = 20
+        op::add(0x12, 0x10, 0x11),       // r18 = 10 + 20 = 30
+        op::sub(0x13, 0x11, 0x10),       // r19 = 20 - 10 = 10
+        op::mul(0x14, 0x10, 0x11),       // r20 = 10 * 20 = 200
+        op::div(0x15, 0x11, 0x10),       // r21 = 20 / 10 = 2
+        op::mod_(0x16, 0x11, 0x10),      // r22 = 20 % 10 = 0
         op::log(0x12, 0x13, 0x14, 0x15), // log results
         op::ret(RegId::ONE),
     ]
@@ -141,7 +144,9 @@ fn test_arithmetic_register_ops() {
 
     // Verify trace output
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     assert!(values.contains(&30), "trace should contain ADD result 30");
     assert!(values.contains(&200), "trace should contain MUL result 200");
@@ -152,12 +157,12 @@ fn test_arithmetic_register_ops() {
 #[test]
 fn test_arithmetic_immediate_ops() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 100),         // r16 = 100
-        op::addi(0x11, 0x10, 50),    // r17 = 100 + 50 = 150
-        op::subi(0x12, 0x10, 30),    // r18 = 100 - 30 = 70
-        op::muli(0x13, 0x10, 3),     // r19 = 100 * 3 = 300
-        op::divi(0x14, 0x10, 4),     // r20 = 100 / 4 = 25
-        op::modi(0x15, 0x10, 7),     // r21 = 100 % 7 = 2
+        op::movi(0x10, 100),      // r16 = 100
+        op::addi(0x11, 0x10, 50), // r17 = 100 + 50 = 150
+        op::subi(0x12, 0x10, 30), // r18 = 100 - 30 = 70
+        op::muli(0x13, 0x10, 3),  // r19 = 100 * 3 = 300
+        op::divi(0x14, 0x10, 4),  // r20 = 100 / 4 = 25
+        op::modi(0x15, 0x10, 7),  // r21 = 100 % 7 = 2
         op::log(0x11, 0x12, 0x13, 0x14),
         op::ret(RegId::ONE),
     ]
@@ -175,10 +180,18 @@ fn test_arithmetic_immediate_ops() {
     assert_eq!(regs[0x15], 2, "MODI: 100 % 7 = 2");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
-    assert!(values.contains(&150), "trace should contain ADDI result 150");
-    assert!(values.contains(&300), "trace should contain MULI result 300");
+    assert!(
+        values.contains(&150),
+        "trace should contain ADDI result 150"
+    );
+    assert!(
+        values.contains(&300),
+        "trace should contain MULI result 300"
+    );
 }
 
 /// Test chained arithmetic producing a larger computation.
@@ -186,11 +199,11 @@ fn test_arithmetic_immediate_ops() {
 fn test_arithmetic_chained() {
     // Compute: ((10 + 20) * 3) - 5 = 85
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 10),          // r16 = 10
-        op::movi(0x11, 20),          // r17 = 20
-        op::add(0x12, 0x10, 0x11),   // r18 = 30
-        op::muli(0x13, 0x12, 3),     // r19 = 90
-        op::subi(0x14, 0x13, 5),     // r20 = 85
+        op::movi(0x10, 10),        // r16 = 10
+        op::movi(0x11, 20),        // r17 = 20
+        op::add(0x12, 0x10, 0x11), // r18 = 30
+        op::muli(0x13, 0x12, 3),   // r19 = 90
+        op::subi(0x14, 0x13, 5),   // r20 = 85
         op::log(0x14, 0x00, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -202,7 +215,9 @@ fn test_arithmetic_chained() {
     assert_eq!(last.1[0x14], 85, "chained arithmetic: ((10+20)*3)-5 = 85");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     assert!(values.contains(&85), "trace should contain final result 85");
     assert!(values.contains(&30), "trace should contain intermediate 30");
@@ -217,14 +232,14 @@ fn test_arithmetic_chained() {
 #[test]
 fn test_comparison_ops() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 42),          // r16 = 42
-        op::movi(0x11, 42),          // r17 = 42
-        op::movi(0x12, 10),          // r18 = 10
-        op::eq(0x13, 0x10, 0x11),    // r19 = (42 == 42) = 1
-        op::gt(0x14, 0x10, 0x12),    // r20 = (42 > 10) = 1
-        op::lt(0x15, 0x12, 0x10),    // r21 = (10 < 42) = 1
-        op::gt(0x16, 0x12, 0x10),    // r22 = (10 > 42) = 0
-        op::eq(0x17, 0x10, 0x12),    // r23 = (42 == 10) = 0
+        op::movi(0x10, 42),       // r16 = 42
+        op::movi(0x11, 42),       // r17 = 42
+        op::movi(0x12, 10),       // r18 = 10
+        op::eq(0x13, 0x10, 0x11), // r19 = (42 == 42) = 1
+        op::gt(0x14, 0x10, 0x12), // r20 = (42 > 10) = 1
+        op::lt(0x15, 0x12, 0x10), // r21 = (10 < 42) = 1
+        op::gt(0x16, 0x12, 0x10), // r22 = (10 > 42) = 0
+        op::eq(0x17, 0x10, 0x12), // r23 = (42 == 10) = 0
         op::log(0x13, 0x14, 0x15, 0x16),
         op::ret(RegId::ONE),
     ]
@@ -242,10 +257,15 @@ fn test_comparison_ops() {
     assert_eq!(regs[0x17], 0, "EQ: 42 == 10 should be 0");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     // Registers r19-r23 (0x13-0x17) are tracked: should see 1s and 0s
-    assert!(values.contains(&1), "trace should contain comparison result 1");
+    assert!(
+        values.contains(&1),
+        "trace should contain comparison result 1"
+    );
 }
 
 /// Test JNZI: conditional jump when register is not zero.
@@ -276,11 +296,11 @@ fn test_jnzi_conditional_jump() {
     let target_word = ((base_pc / 4) + 4) as u32; // instruction index 4
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 1),             // 0: r16 = 1
-        op::movi(0x11, 100),           // 1: r17 = 100
-        op::jnzi(0x10, target_word),   // 2: if r16 != 0, jump to 4
-        op::movi(0x11, 999),           // 3: r17 = 999 (should be skipped)
-        op::movi(0x12, 200),           // 4: r18 = 200
+        op::movi(0x10, 1),           // 0: r16 = 1
+        op::movi(0x11, 100),         // 1: r17 = 100
+        op::jnzi(0x10, target_word), // 2: if r16 != 0, jump to 4
+        op::movi(0x11, 999),         // 3: r17 = 999 (should be skipped)
+        op::movi(0x12, 200),         // 4: r18 = 200
         op::log(0x11, 0x12, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -291,15 +311,23 @@ fn test_jnzi_conditional_jump() {
     let last = &steps[steps.len() - 1];
     let regs = &last.1;
 
-    assert_eq!(regs[0x11], 100, "JNZI should skip instruction 3, r17 stays 100");
+    assert_eq!(
+        regs[0x11], 100,
+        "JNZI should skip instruction 3, r17 stays 100"
+    );
     assert_eq!(regs[0x12], 200, "instruction 4 should execute");
 
     // Verify the trace records the jump
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
     // With jump, we skip instruction 3, so fewer steps
-    assert!(step_count >= 5, "should have at least 5 step events, got {step_count}");
+    assert!(
+        step_count >= 5,
+        "should have at least 5 step events, got {step_count}"
+    );
 }
 
 /// Test JNEI: conditional jump when two registers are not equal.
@@ -312,11 +340,11 @@ fn test_jnei_conditional_jump() {
     let target_word = ((base_pc / 4) + 4) as u16;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 10),            // 0: r16 = 10
-        op::movi(0x11, 20),            // 1: r17 = 20
+        op::movi(0x10, 10),                // 0: r16 = 10
+        op::movi(0x11, 20),                // 1: r17 = 20
         op::jnei(0x10, 0x11, target_word), // 2: if r16 != r17, jump to 4
-        op::movi(0x12, 999),           // 3: skipped
-        op::movi(0x12, 42),            // 4: r18 = 42
+        op::movi(0x12, 999),               // 3: skipped
+        op::movi(0x12, 42),                // 4: r18 = 42
         op::log(0x12, 0x00, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -325,7 +353,10 @@ fn test_jnei_conditional_jump() {
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x12], 42, "JNEI should jump when r16 != r17, r18 = 42");
+    assert_eq!(
+        last.1[0x12], 42,
+        "JNEI should jump when r16 != r17, r18 = 42"
+    );
 }
 
 /// Test JI: unconditional jump.
@@ -337,10 +368,10 @@ fn test_ji_unconditional_jump() {
     let target_word = ((base_pc / 4) + 3) as u32;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 10),            // 0: r16 = 10
-        op::ji(target_word),           // 1: jump to instruction 3
-        op::movi(0x10, 999),           // 2: skipped
-        op::movi(0x11, 42),            // 3: r17 = 42
+        op::movi(0x10, 10),  // 0: r16 = 10
+        op::ji(target_word), // 1: jump to instruction 3
+        op::movi(0x10, 999), // 2: skipped
+        op::movi(0x11, 42),  // 3: r17 = 42
         op::log(0x10, 0x11, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -349,8 +380,14 @@ fn test_ji_unconditional_jump() {
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x10], 10, "JI: r16 should remain 10 (instruction 2 skipped)");
-    assert_eq!(last.1[0x11], 42, "JI: r17 should be 42 (instruction 3 executed)");
+    assert_eq!(
+        last.1[0x10], 10,
+        "JI: r16 should remain 10 (instruction 2 skipped)"
+    );
+    assert_eq!(
+        last.1[0x11], 42,
+        "JI: r17 should be 42 (instruction 3 executed)"
+    );
 }
 
 // =========================================================================
@@ -361,10 +398,10 @@ fn test_ji_unconditional_jump() {
 #[test]
 fn test_movi_and_move() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 0x1234),        // r16 = 0x1234
-        op::move_(0x11, 0x10),         // r17 = r16 = 0x1234
-        op::movi(0x12, 0),             // r18 = 0
-        op::move_(0x12, 0x11),         // r18 = r17 = 0x1234
+        op::movi(0x10, 0x1234), // r16 = 0x1234
+        op::move_(0x11, 0x10),  // r17 = r16 = 0x1234
+        op::movi(0x12, 0),      // r18 = 0
+        op::move_(0x12, 0x11),  // r18 = r17 = 0x1234
         op::log(0x10, 0x11, 0x12, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -380,7 +417,9 @@ fn test_movi_and_move() {
     assert_eq!(regs[0x12], 0x1234, "MOVE: r18 = r17 = 0x1234");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     assert!(
         values.contains(&0x1234),
@@ -392,12 +431,12 @@ fn test_movi_and_move() {
 #[test]
 fn test_mroo_integer_sqrt() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 144),          // r16 = 144
-        op::movi(0x11, 2),            // r17 = 2 (square root = nth root where n=2)
-        op::mroo(0x12, 0x10, 0x11),   // r18 = isqrt(144) = 12
-        op::movi(0x13, 27),           // r19 = 27
-        op::movi(0x14, 3),            // r20 = 3 (cube root)
-        op::mroo(0x15, 0x13, 0x14),   // r21 = icbrt(27) = 3
+        op::movi(0x10, 144),        // r16 = 144
+        op::movi(0x11, 2),          // r17 = 2 (square root = nth root where n=2)
+        op::mroo(0x12, 0x10, 0x11), // r18 = isqrt(144) = 12
+        op::movi(0x13, 27),         // r19 = 27
+        op::movi(0x14, 3),          // r20 = 3 (cube root)
+        op::mroo(0x15, 0x13, 0x14), // r21 = icbrt(27) = 3
         op::log(0x12, 0x15, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -410,7 +449,9 @@ fn test_mroo_integer_sqrt() {
     assert_eq!(last.1[0x15], 3, "MROO: icbrt(27) = 3");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     assert!(values.contains(&12), "trace should contain sqrt(144) = 12");
     assert!(values.contains(&3), "trace should contain cbrt(27) = 3");
@@ -425,12 +466,12 @@ fn test_mroo_integer_sqrt() {
 fn test_memory_store_load() {
     // Allocate heap memory, store a word, load it back.
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 8),            // r16 = 8 (bytes to allocate)
-        op::aloc(0x10),               // allocate 8 bytes on heap
+        op::movi(0x10, 8), // r16 = 8 (bytes to allocate)
+        op::aloc(0x10),    // allocate 8 bytes on heap
         // HP register (RegId::HP = 6) now points to the allocated memory
-        op::movi(0x11, 0xCAFE),       // r17 = 0xCAFE (value to store)
-        op::sw(RegId::HP, 0x11, 0),   // store r17 at HP+0
-        op::lw(0x12, RegId::HP, 0),   // r18 = load word from HP+0
+        op::movi(0x11, 0xCAFE),     // r17 = 0xCAFE (value to store)
+        op::sw(RegId::HP, 0x11, 0), // store r17 at HP+0
+        op::lw(0x12, RegId::HP, 0), // r18 = load word from HP+0
         op::log(0x11, 0x12, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -443,25 +484,33 @@ fn test_memory_store_load() {
         last.1[0x12], 0xCAFE,
         "LW should load the same value that SW stored"
     );
-    assert_eq!(last.1[0x11], last.1[0x12], "stored and loaded values should match");
+    assert_eq!(
+        last.1[0x11], last.1[0x12],
+        "stored and loaded values should match"
+    );
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
-    assert!(values.contains(&0xCAFE), "trace should contain stored value 0xCAFE");
+    assert!(
+        values.contains(&0xCAFE),
+        "trace should contain stored value 0xCAFE"
+    );
 }
 
 /// Test MCL (memory clear) -- clear a region of memory.
 #[test]
 fn test_memory_clear() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 16),           // r16 = 16 bytes to allocate
-        op::aloc(0x10),               // allocate 16 bytes
-        op::movi(0x11, 0xBEEF),       // r17 = value
-        op::sw(RegId::HP, 0x11, 0),   // store at HP
-        op::movi(0x12, 8),            // r18 = 8 bytes to clear
-        op::mcl(RegId::HP, 0x12),     // clear 8 bytes starting at HP
-        op::lw(0x13, RegId::HP, 0),   // r19 = load from HP (should be 0 after clear)
+        op::movi(0x10, 16),         // r16 = 16 bytes to allocate
+        op::aloc(0x10),             // allocate 16 bytes
+        op::movi(0x11, 0xBEEF),     // r17 = value
+        op::sw(RegId::HP, 0x11, 0), // store at HP
+        op::movi(0x12, 8),          // r18 = 8 bytes to clear
+        op::mcl(RegId::HP, 0x12),   // clear 8 bytes starting at HP
+        op::lw(0x13, RegId::HP, 0), // r19 = load from HP (should be 0 after clear)
         op::log(0x13, 0x00, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -477,15 +526,15 @@ fn test_memory_clear() {
 #[test]
 fn test_memory_copy() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 32),           // r16 = 32 bytes to allocate (two 8-byte regions)
-        op::aloc(0x10),               // allocate
-        op::movi(0x11, 0x4242),       // r17 = value
-        op::sw(RegId::HP, 0x11, 0),   // store at HP (source region)
+        op::movi(0x10, 32),         // r16 = 32 bytes to allocate (two 8-byte regions)
+        op::aloc(0x10),             // allocate
+        op::movi(0x11, 0x4242),     // r17 = value
+        op::sw(RegId::HP, 0x11, 0), // store at HP (source region)
         // Compute destination = HP + 16
-        op::addi(0x12, RegId::HP, 16), // r18 = HP + 16
-        op::movi(0x13, 8),            // r19 = 8 bytes to copy
+        op::addi(0x12, RegId::HP, 16),  // r18 = HP + 16
+        op::movi(0x13, 8),              // r19 = 8 bytes to copy
         op::mcp(0x12, RegId::HP, 0x13), // copy 8 bytes from HP to HP+16
-        op::lw(0x14, 0x12, 0),        // r20 = load from destination
+        op::lw(0x14, 0x12, 0),          // r20 = load from destination
         op::log(0x11, 0x14, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -494,7 +543,10 @@ fn test_memory_copy() {
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x14], 0x4242, "MCP: copied value should match source");
+    assert_eq!(
+        last.1[0x14], 0x4242,
+        "MCP: copied value should match source"
+    );
 }
 
 // =========================================================================
@@ -505,10 +557,10 @@ fn test_memory_copy() {
 #[test]
 fn test_log_instruction() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 111),          // r16 = 111
-        op::movi(0x11, 222),          // r17 = 222
-        op::movi(0x12, 333),          // r18 = 333
-        op::movi(0x13, 444),          // r19 = 444
+        op::movi(0x10, 111), // r16 = 111
+        op::movi(0x11, 222), // r17 = 222
+        op::movi(0x12, 333), // r18 = 333
+        op::movi(0x13, 444), // r19 = 444
         op::log(0x10, 0x11, 0x12, 0x13),
         op::ret(RegId::ONE),
     ]
@@ -532,11 +584,16 @@ fn test_log_instruction() {
         })
         .unwrap();
 
-    assert!(saw_log_receipt, "should see Log receipt with values 111,222,333,444");
+    assert!(
+        saw_log_receipt,
+        "should see Log receipt with values 111,222,333,444"
+    );
 
     // Verify trace captures the values
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     assert!(values.contains(&111), "trace should contain log value 111");
     assert!(values.contains(&222), "trace should contain log value 222");
@@ -548,13 +605,13 @@ fn test_log_instruction() {
 #[test]
 fn test_logd_instruction() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 16),           // r16 = 16 bytes to allocate
-        op::aloc(0x10),               // allocate
-        op::movi(0x11, 0xDEAD),       // r17 = value
-        op::sw(RegId::HP, 0x11, 0),   // store at HP
-        op::movi(0x12, 0),            // r18 = 0 (ra for logd)
-        op::movi(0x13, 0),            // r19 = 0 (rb for logd)
-        op::movi(0x14, 8),            // r20 = 8 (length)
+        op::movi(0x10, 16),                    // r16 = 16 bytes to allocate
+        op::aloc(0x10),                        // allocate
+        op::movi(0x11, 0xDEAD),                // r17 = value
+        op::sw(RegId::HP, 0x11, 0),            // store at HP
+        op::movi(0x12, 0),                     // r18 = 0 (ra for logd)
+        op::movi(0x13, 0),                     // r19 = 0 (rb for logd)
+        op::movi(0x14, 8),                     // r20 = 8 (length)
         op::logd(0x12, 0x13, RegId::HP, 0x14), // logd(0, 0, HP, 8)
         op::ret(RegId::ONE),
     ]
@@ -579,7 +636,9 @@ fn test_logd_instruction() {
 
     // Also verify through the recorder
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
     assert!(step_count >= 7, "should have steps for all instructions");
 }
@@ -612,26 +671,31 @@ fn test_simple_branch() {
     let ji_target = ((base_pc / 4) + 7) as u32;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 20),           // 0: value = 20
-        op::movi(0x11, 15),           // 1: threshold = 15
-        op::gt(0x12, 0x10, 0x11),     // 2: r18 = (20 > 15) = 1
-        op::jnzi(0x12, jnzi_target),  // 3: if true, jump to 6
-        op::movi(0x12, 0),            // 4: false branch
-        op::ji(ji_target),            // 5: skip true branch
-        op::movi(0x12, 1),            // 6: true branch
+        op::movi(0x10, 20),              // 0: value = 20
+        op::movi(0x11, 15),              // 1: threshold = 15
+        op::gt(0x12, 0x10, 0x11),        // 2: r18 = (20 > 15) = 1
+        op::jnzi(0x12, jnzi_target),     // 3: if true, jump to 6
+        op::movi(0x12, 0),               // 4: false branch
+        op::ji(ji_target),               // 5: skip true branch
+        op::movi(0x12, 1),               // 6: true branch
         op::log(0x12, 0x00, 0x00, 0x00), // 7
-        op::ret(RegId::ONE),          // 8
+        op::ret(RegId::ONE),             // 8
     ]
     .into_iter()
     .collect();
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x12], 1, "branch: 20 > 15 should take true branch, r18 = 1");
+    assert_eq!(
+        last.1[0x12], 1,
+        "branch: 20 > 15 should take true branch, r18 = 1"
+    );
 
     // Verify trace has correct steps (some instructions skipped)
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
     // Instructions 4 and 5 are skipped, so we should see about 7 steps
     assert!(
@@ -652,22 +716,25 @@ fn test_simple_branch_false() {
 
     // Same structure but value (5) is NOT > threshold (15)
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 5),            // 0: value = 5
-        op::movi(0x11, 15),           // 1: threshold = 15
-        op::gt(0x12, 0x10, 0x11),     // 2: r18 = (5 > 15) = 0
-        op::jnzi(0x12, jnzi_target),  // 3: jump NOT taken (r18 = 0)
-        op::movi(0x12, 0),            // 4: false branch (executed)
-        op::ji(ji_target),            // 5: skip true branch
-        op::movi(0x12, 1),            // 6: true branch (skipped)
+        op::movi(0x10, 5),               // 0: value = 5
+        op::movi(0x11, 15),              // 1: threshold = 15
+        op::gt(0x12, 0x10, 0x11),        // 2: r18 = (5 > 15) = 0
+        op::jnzi(0x12, jnzi_target),     // 3: jump NOT taken (r18 = 0)
+        op::movi(0x12, 0),               // 4: false branch (executed)
+        op::ji(ji_target),               // 5: skip true branch
+        op::movi(0x12, 1),               // 6: true branch (skipped)
         op::log(0x12, 0x00, 0x00, 0x00), // 7
-        op::ret(RegId::ONE),          // 8
+        op::ret(RegId::ONE),             // 8
     ]
     .into_iter()
     .collect();
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x12], 0, "branch: 5 > 15 is false, should take false branch, r18 = 0");
+    assert_eq!(
+        last.1[0x12], 0,
+        "branch: 5 > 15 is false, should take false branch, r18 = 0"
+    );
 }
 
 /// Loop: count down from 5 to 0.
@@ -693,15 +760,15 @@ fn test_loop_countdown() {
     let loop_start = ((base_pc / 4) + 2) as u32;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 5),            // 0: counter = 5
-        op::movi(0x11, 0),            // 1: accumulator = 0
-        op::jnzi(0x10, body_target),  // 2: if counter != 0, goto 4
-        op::ji(exit_target),          // 3: exit loop
-        op::addi(0x11, 0x11, 1),      // 4: accumulator += 1
-        op::subi(0x10, 0x10, 1),      // 5: counter -= 1
-        op::ji(loop_start),           // 6: jump to loop_start
+        op::movi(0x10, 5),               // 0: counter = 5
+        op::movi(0x11, 0),               // 1: accumulator = 0
+        op::jnzi(0x10, body_target),     // 2: if counter != 0, goto 4
+        op::ji(exit_target),             // 3: exit loop
+        op::addi(0x11, 0x11, 1),         // 4: accumulator += 1
+        op::subi(0x10, 0x10, 1),         // 5: counter -= 1
+        op::ji(loop_start),              // 6: jump to loop_start
         op::log(0x10, 0x11, 0x00, 0x00), // 7: log
-        op::ret(RegId::ONE),          // 8
+        op::ret(RegId::ONE),             // 8
     ]
     .into_iter()
     .collect();
@@ -709,11 +776,16 @@ fn test_loop_countdown() {
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
     assert_eq!(last.1[0x10], 0, "loop: counter should be 0 after countdown");
-    assert_eq!(last.1[0x11], 5, "loop: accumulator should be 5 (iterated 5 times)");
+    assert_eq!(
+        last.1[0x11], 5,
+        "loop: accumulator should be 5 (iterated 5 times)"
+    );
 
     // Verify the trace recorded multiple iterations
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
     // 5 iterations of body (3 instructions each: ADDI, SUBI, JI) + check + exit
     // Plus initial setup (2 instructions) and final (2 instructions)
@@ -756,21 +828,21 @@ fn test_nested_branches() {
     let true_true = ((base_pc / 4) + 12) as u32;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 15),           // 0: a = 15
-        op::movi(0x11, 25),           // 1: b = 25
-        op::movi(0x13, 10),           // 2: threshold1 = 10
-        op::gt(0x12, 0x10, 0x13),     // 3: r18 = (15 > 10) = 1
-        op::jnzi(0x12, inner_check),  // 4: jump to 7
-        op::movi(0x14, 3),            // 5: result = 3 (skipped)
-        op::ji(end_target),           // 6: goto end (skipped)
-        op::movi(0x13, 20),           // 7: threshold2 = 20
-        op::gt(0x12, 0x11, 0x13),     // 8: r18 = (25 > 20) = 1
-        op::jnzi(0x12, true_true),    // 9: jump to 12
-        op::movi(0x14, 2),            // 10: result = 2 (skipped)
-        op::ji(end_target),           // 11: goto end (skipped)
-        op::movi(0x14, 1),            // 12: result = 1
+        op::movi(0x10, 15),              // 0: a = 15
+        op::movi(0x11, 25),              // 1: b = 25
+        op::movi(0x13, 10),              // 2: threshold1 = 10
+        op::gt(0x12, 0x10, 0x13),        // 3: r18 = (15 > 10) = 1
+        op::jnzi(0x12, inner_check),     // 4: jump to 7
+        op::movi(0x14, 3),               // 5: result = 3 (skipped)
+        op::ji(end_target),              // 6: goto end (skipped)
+        op::movi(0x13, 20),              // 7: threshold2 = 20
+        op::gt(0x12, 0x11, 0x13),        // 8: r18 = (25 > 20) = 1
+        op::jnzi(0x12, true_true),       // 9: jump to 12
+        op::movi(0x14, 2),               // 10: result = 2 (skipped)
+        op::ji(end_target),              // 11: goto end (skipped)
+        op::movi(0x14, 1),               // 12: result = 1
         op::log(0x14, 0x00, 0x00, 0x00), // 13
-        op::ret(RegId::ONE),          // 14
+        op::ret(RegId::ONE),             // 14
     ]
     .into_iter()
     .collect();
@@ -783,7 +855,9 @@ fn test_nested_branches() {
     );
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     // The final result (1) should be in the trace
     assert!(
@@ -798,22 +872,30 @@ fn test_early_return() {
     // The program returns immediately after setting r16 = 42.
     // Instructions after RET should not execute.
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 42),           // r16 = 42
-        op::ret(RegId::ONE),          // return early
-        op::movi(0x10, 999),          // should NOT execute
-        op::movi(0x11, 888),          // should NOT execute
+        op::movi(0x10, 42),  // r16 = 42
+        op::ret(RegId::ONE), // return early
+        op::movi(0x10, 999), // should NOT execute
+        op::movi(0x11, 888), // should NOT execute
     ]
     .into_iter()
     .collect();
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x10], 42, "early return: r16 should be 42, not overwritten");
-    assert_eq!(last.1[0x11], 0, "early return: r17 should be 0 (instruction never executed)");
+    assert_eq!(
+        last.1[0x10], 42,
+        "early return: r16 should be 42, not overwritten"
+    );
+    assert_eq!(
+        last.1[0x11], 0,
+        "early return: r17 should be 0 (instruction never executed)"
+    );
 
     // Verify only 2 steps recorded (MOVI + RET)
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
     assert!(
         step_count <= 3,
@@ -828,21 +910,26 @@ fn test_early_return() {
 /// Verify that the recorder produces Call and Return events for main.
 #[test]
 fn test_trace_call_return_structure() {
-    let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 1),
-        op::ret(RegId::ONE),
-    ]
-    .into_iter()
-    .collect();
+    let bytecode: Vec<u8> = vec![op::movi(0x10, 1), op::ret(RegId::ONE)]
+        .into_iter()
+        .collect();
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
 
     let calls = count_calls(&events);
     let returns = count_returns(&events);
 
-    assert!(calls >= 1, "should have at least 1 Call event for main, got {calls}");
-    assert!(returns >= 1, "should have at least 1 Return event, got {returns}");
+    assert!(
+        calls >= 1,
+        "should have at least 1 Call event for main, got {calls}"
+    );
+    assert!(
+        returns >= 1,
+        "should have at least 1 Return event, got {returns}"
+    );
 }
 
 /// Verify that the trace has VariableName events for tracked registers.
@@ -859,7 +946,9 @@ fn test_trace_variable_names() {
     .collect();
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let names = extract_var_names(&events);
 
     // The variable tracker should name MOVIs as "imm_N" and ADDs as "X_plus_Y".
@@ -881,7 +970,10 @@ fn test_trace_variable_names() {
     // before those registers are written by tracked instructions -- that is
     // expected since the recorder emits all registers r16-r23 on every step.
     assert_eq!(
-        names.iter().filter(|n| *n == "imm_7" || *n == "imm_13" || *n == "imm_7_plus_imm_13").count(),
+        names
+            .iter()
+            .filter(|n| *n == "imm_7" || *n == "imm_13" || *n == "imm_7_plus_imm_13")
+            .count(),
         3,
         "expected exactly 3 meaningful variable names (imm_7, imm_13, imm_7_plus_imm_13), got: {names:?}"
     );
@@ -900,30 +992,19 @@ fn test_trace_output_completeness() {
     .collect();
 
     let (dir, _events) = record_and_parse(&bytecode);
-    if _events.is_empty() { return; }
+    if _events.is_empty() {
+        return;
+    }
     let out_dir = dir.path().join("traces");
 
-    // Check all three files exist and are non-empty
-    for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
-        let path = out_dir.join(filename);
-        assert!(path.exists(), "{filename} should exist");
-        let size = std::fs::metadata(&path).unwrap().len();
-        assert!(size > 0, "{filename} should be non-empty");
-    }
-
-    // Verify metadata is valid JSON
-    let metadata: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(out_dir.join("trace_metadata.json")).unwrap(),
-    )
-    .expect("trace_metadata.json should be valid JSON");
-    assert!(metadata.is_object() || metadata.is_array());
-
-    // Verify paths is valid JSON
-    let paths: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(out_dir.join("trace_paths.json")).unwrap(),
-    )
-    .expect("trace_paths.json should be valid JSON");
-    assert!(paths.is_object() || paths.is_array());
+    // Check the CTFS container exists and is non-empty.  Legacy
+    // `trace_metadata.json` / `trace_paths.json` sidecars were retired
+    // with the v3 CTFS rollout (follow-up #254 phase 2); program /
+    // paths metadata now lives in `meta.dat` inside the container.
+    let trace_bin = out_dir.join("trace.bin");
+    assert!(trace_bin.exists(), "trace.bin should exist");
+    let size = std::fs::metadata(&trace_bin).unwrap().len();
+    assert!(size > 0, "trace.bin should be non-empty");
 }
 
 /// Verify that Step events have incrementing line numbers (for linear code).
@@ -941,7 +1022,9 @@ fn test_step_line_numbers_monotonic() {
     .collect();
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
 
     let step_lines: Vec<i64> = events
         .iter()
@@ -990,10 +1073,15 @@ fn test_many_operations() {
 
     let steps = run_and_collect_steps(bytecode.clone());
     let last = &steps[steps.len() - 1];
-    assert_eq!(last.1[0x10], 51, "after 50 additions of 1 starting from 1, r16 = 51");
+    assert_eq!(
+        last.1[0x10], 51,
+        "after 50 additions of 1 starting from 1, r16 = 51"
+    );
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
     assert!(
         step_count >= 50,
@@ -1005,12 +1093,12 @@ fn test_many_operations() {
 #[test]
 fn test_division_and_modulo_edge_cases() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 100),          // r16 = 100
-        op::divi(0x11, 0x10, 3),      // r17 = 100 / 3 = 33
-        op::modi(0x12, 0x10, 3),      // r18 = 100 % 3 = 1
+        op::movi(0x10, 100),     // r16 = 100
+        op::divi(0x11, 0x10, 3), // r17 = 100 / 3 = 33
+        op::modi(0x12, 0x10, 3), // r18 = 100 % 3 = 1
         // Verify: 33 * 3 + 1 = 100
-        op::muli(0x13, 0x11, 3),      // r19 = 33 * 3 = 99
-        op::add(0x14, 0x13, 0x12),    // r20 = 99 + 1 = 100
+        op::muli(0x13, 0x11, 3),   // r19 = 33 * 3 = 99
+        op::add(0x14, 0x13, 0x12), // r20 = 99 + 1 = 100
         op::log(0x11, 0x12, 0x14, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -1021,7 +1109,10 @@ fn test_division_and_modulo_edge_cases() {
     let last = &steps[steps.len() - 1];
     assert_eq!(last.1[0x11], 33, "100 / 3 = 33");
     assert_eq!(last.1[0x12], 1, "100 % 3 = 1");
-    assert_eq!(last.1[0x14], 100, "quotient * divisor + remainder = original");
+    assert_eq!(
+        last.1[0x14], 100,
+        "quotient * divisor + remainder = original"
+    );
 }
 
 /// Test that NOOP instructions are handled correctly.
@@ -1044,18 +1135,23 @@ fn test_noop_instructions() {
     assert_eq!(last.1[0x11], 7, "MOVI after NOOPs should work");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let step_count = count_steps(&events);
-    assert!(step_count >= 5, "should step through NOOPs, got {step_count}");
+    assert!(
+        step_count >= 5,
+        "should step through NOOPs, got {step_count}"
+    );
 }
 
 /// Test EXP (exponentiation).
 #[test]
 fn test_exponentiation() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 2),            // r16 = 2
-        op::movi(0x11, 10),           // r17 = 10
-        op::exp(0x12, 0x10, 0x11),    // r18 = 2^10 = 1024
+        op::movi(0x10, 2),         // r16 = 2
+        op::movi(0x11, 10),        // r17 = 10
+        op::exp(0x12, 0x10, 0x11), // r18 = 2^10 = 1024
         op::log(0x12, 0x00, 0x00, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -1067,7 +1163,9 @@ fn test_exponentiation() {
     assert_eq!(last.1[0x12], 1024, "EXP: 2^10 = 1024");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
     assert!(values.contains(&1024), "trace should contain 2^10 = 1024");
 }
@@ -1076,15 +1174,15 @@ fn test_exponentiation() {
 #[test]
 fn test_bitwise_operations() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 0xFF),         // r16 = 0xFF
-        op::movi(0x11, 0x0F),         // r17 = 0x0F
-        op::and(0x12, 0x10, 0x11),    // r18 = 0xFF & 0x0F = 0x0F
-        op::or(0x13, 0x10, 0x11),     // r19 = 0xFF | 0x0F = 0xFF
-        op::xor(0x14, 0x10, 0x11),    // r20 = 0xFF ^ 0x0F = 0xF0
-        op::movi(0x15, 1),            // r21 = 1
-        op::sll(0x16, 0x15, 0x11),    // r22 = 1 << 15 (but r17=0x0F=15)
-        op::movi(0x17, 3),            // r23 shift amount
-        op::srl(0x17, 0x10, 0x17),    // r23 = 0xFF >> 3 = 31
+        op::movi(0x10, 0xFF),      // r16 = 0xFF
+        op::movi(0x11, 0x0F),      // r17 = 0x0F
+        op::and(0x12, 0x10, 0x11), // r18 = 0xFF & 0x0F = 0x0F
+        op::or(0x13, 0x10, 0x11),  // r19 = 0xFF | 0x0F = 0xFF
+        op::xor(0x14, 0x10, 0x11), // r20 = 0xFF ^ 0x0F = 0xF0
+        op::movi(0x15, 1),         // r21 = 1
+        op::sll(0x16, 0x15, 0x11), // r22 = 1 << 15 (but r17=0x0F=15)
+        op::movi(0x17, 3),         // r23 shift amount
+        op::srl(0x17, 0x10, 0x17), // r23 = 0xFF >> 3 = 31
         op::log(0x12, 0x13, 0x14, 0x16),
         op::ret(RegId::ONE),
     ]
@@ -1133,18 +1231,18 @@ fn test_fibonacci_loop() {
     let loop_check = ((base_pc / 4) + 3) as u32;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 0),            // 0: a = 0
-        op::movi(0x11, 1),            // 1: b = 1
-        op::movi(0x12, 10),           // 2: counter = 10
-        op::jnzi(0x12, body_target),  // 3: loop_check
-        op::ji(exit_target),          // 4: exit
-        op::add(0x13, 0x10, 0x11),    // 5: next = a + b
-        op::move_(0x10, 0x11),        // 6: a = b
-        op::move_(0x11, 0x13),        // 7: b = next
-        op::subi(0x12, 0x12, 1),      // 8: counter--
-        op::ji(loop_check),           // 9: back to check
+        op::movi(0x10, 0),               // 0: a = 0
+        op::movi(0x11, 1),               // 1: b = 1
+        op::movi(0x12, 10),              // 2: counter = 10
+        op::jnzi(0x12, body_target),     // 3: loop_check
+        op::ji(exit_target),             // 4: exit
+        op::add(0x13, 0x10, 0x11),       // 5: next = a + b
+        op::move_(0x10, 0x11),           // 6: a = b
+        op::move_(0x11, 0x13),           // 7: b = next
+        op::subi(0x12, 0x12, 1),         // 8: counter--
+        op::ji(loop_check),              // 9: back to check
         op::log(0x11, 0x10, 0x12, 0x00), // 10: log
-        op::ret(RegId::ONE),          // 11
+        op::ret(RegId::ONE),             // 11
     ]
     .into_iter()
     .collect();
@@ -1156,9 +1254,14 @@ fn test_fibonacci_loop() {
     assert_eq!(last.1[0x12], 0, "counter should be 0 after loop");
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
-    assert!(values.contains(&89), "trace should contain fibonacci result 89");
+    assert!(
+        values.contains(&89),
+        "trace should contain fibonacci result 89"
+    );
 }
 
 /// Verify that the recorder correctly handles multiple LOG instructions.
@@ -1191,18 +1294,21 @@ fn test_multiple_logs() {
     // We count accumulated receipts at each step, so the total count of
     // Log receipts seen across all steps is >= 3 (they accumulate).
     // The important thing is that all 3 LOG instructions produced receipts.
-    assert!(log_count >= 3, "should see at least 3 Log receipts (accumulated), got {log_count}");
+    assert!(
+        log_count >= 3,
+        "should see at least 3 Log receipts (accumulated), got {log_count}"
+    );
 }
 
 /// Test stack frame operations: CFEI (extend) and CFSI (shrink).
 #[test]
 fn test_stack_frame_operations() {
     let bytecode: Vec<u8> = vec![
-        op::move_(0x10, RegId::SP),    // r16 = SP (before extend)
-        op::cfei(64),                  // extend stack by 64 bytes
-        op::move_(0x11, RegId::SP),    // r17 = SP (after extend)
-        op::cfsi(64),                  // shrink stack by 64 bytes
-        op::move_(0x12, RegId::SP),    // r18 = SP (after shrink, should equal r16)
+        op::move_(0x10, RegId::SP), // r16 = SP (before extend)
+        op::cfei(64),               // extend stack by 64 bytes
+        op::move_(0x11, RegId::SP), // r17 = SP (after extend)
+        op::cfsi(64),               // shrink stack by 64 bytes
+        op::move_(0x12, RegId::SP), // r18 = SP (after shrink, should equal r16)
         op::log(0x10, 0x11, 0x12, 0x00),
         op::ret(RegId::ONE),
     ]
@@ -1232,14 +1338,14 @@ fn test_stack_frame_operations() {
 #[test]
 fn test_all_tracked_registers() {
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 16),           // r16 = 16
-        op::movi(0x11, 17),           // r17 = 17
-        op::movi(0x12, 18),           // r18 = 18
-        op::movi(0x13, 19),           // r19 = 19
-        op::movi(0x14, 20),           // r20 = 20
-        op::movi(0x15, 21),           // r21 = 21
-        op::movi(0x16, 22),           // r22 = 22
-        op::movi(0x17, 23),           // r23 = 23
+        op::movi(0x10, 16), // r16 = 16
+        op::movi(0x11, 17), // r17 = 17
+        op::movi(0x12, 18), // r18 = 18
+        op::movi(0x13, 19), // r19 = 19
+        op::movi(0x14, 20), // r20 = 20
+        op::movi(0x15, 21), // r21 = 21
+        op::movi(0x16, 22), // r22 = 22
+        op::movi(0x17, 23), // r23 = 23
         op::log(0x10, 0x11, 0x12, 0x13),
         op::ret(RegId::ONE),
     ]
@@ -1247,7 +1353,9 @@ fn test_all_tracked_registers() {
     .collect();
 
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
 
     for val in 16..=23 {
@@ -1295,17 +1403,17 @@ fn test_m2_while_loop_iteration_values() {
     let loop_check = ((base_pc / 4) + 3) as u32;
 
     let bytecode: Vec<u8> = vec![
-        op::movi(0x10, 0),            // 0: sum = 0
-        op::movi(0x11, 1),            // 1: i = 1
-        op::movi(0x12, 5),            // 2: n = 5
-        op::gt(0x13, 0x11, 0x12),     // 3: r19 = (i > n)
-        op::jnzi(0x13, exit_target),  // 4: if i > n, exit
-        op::add(0x10, 0x10, 0x11),    // 5: sum += i
-        op::addi(0x11, 0x11, 1),      // 6: i += 1
-        op::ji(loop_check),           // 7: goto loop_check
-        op::noop(),                   // 8: padding
+        op::movi(0x10, 0),               // 0: sum = 0
+        op::movi(0x11, 1),               // 1: i = 1
+        op::movi(0x12, 5),               // 2: n = 5
+        op::gt(0x13, 0x11, 0x12),        // 3: r19 = (i > n)
+        op::jnzi(0x13, exit_target),     // 4: if i > n, exit
+        op::add(0x10, 0x10, 0x11),       // 5: sum += i
+        op::addi(0x11, 0x11, 1),         // 6: i += 1
+        op::ji(loop_check),              // 7: goto loop_check
+        op::noop(),                      // 8: padding
         op::log(0x10, 0x11, 0x12, 0x00), // 9: log
-        op::ret(RegId::ONE),          // 10
+        op::ret(RegId::ONE),             // 10
     ]
     .into_iter()
     .collect();
@@ -1342,7 +1450,11 @@ fn test_m2_while_loop_iteration_values() {
         "should have 5 loop iterations, got {}",
         iteration_sums.len()
     );
-    assert_eq!(iteration_sums, vec![1, 3, 6, 10, 15], "sum at each iteration");
+    assert_eq!(
+        iteration_sums,
+        vec![1, 3, 6, 10, 15],
+        "sum at each iteration"
+    );
     assert_eq!(
         iteration_counters,
         vec![1, 2, 3, 4, 5],
@@ -1351,7 +1463,9 @@ fn test_m2_while_loop_iteration_values() {
 
     // Part 2: Verify that the trace output contains all intermediate values
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
 
     // The trace should capture intermediate sum values from each iteration
@@ -1419,25 +1533,25 @@ fn test_m2_pattern_matching_branches() {
 
     let build_match_bytecode = |tag: u32| -> Vec<u8> {
         vec![
-            op::movi(0x10, tag),              // 0: tag
-            op::movi(0x11, 0),                // 1: cmp val 0
-            op::eq(0x13, 0x10, 0x11),         // 2: tag == 0?
-            op::jnzi(0x13, branch_0),         // 3: goto case_0
-            op::movi(0x11, 1),                // 4: cmp val 1
-            op::eq(0x13, 0x10, 0x11),         // 5: tag == 1?
-            op::jnzi(0x13, branch_1),         // 6: goto case_1
-            op::movi(0x11, 2),                // 7: cmp val 2
-            op::eq(0x13, 0x10, 0x11),         // 8: tag == 2?
-            op::jnzi(0x13, branch_2),         // 9: goto case_2
-            op::movi(0x12, 999),              // 10: default
-            op::ji(end_target),               // 11: goto end
-            op::movi(0x12, 100),              // 12: case_0
-            op::ji(end_target),               // 13: goto end
-            op::movi(0x12, 200),              // 14: case_1
-            op::ji(end_target),               // 15: goto end
-            op::movi(0x12, 300),              // 16: case_2
-            op::log(0x10, 0x12, 0x00, 0x00),  // 17: log
-            op::ret(RegId::ONE),              // 18
+            op::movi(0x10, tag),             // 0: tag
+            op::movi(0x11, 0),               // 1: cmp val 0
+            op::eq(0x13, 0x10, 0x11),        // 2: tag == 0?
+            op::jnzi(0x13, branch_0),        // 3: goto case_0
+            op::movi(0x11, 1),               // 4: cmp val 1
+            op::eq(0x13, 0x10, 0x11),        // 5: tag == 1?
+            op::jnzi(0x13, branch_1),        // 6: goto case_1
+            op::movi(0x11, 2),               // 7: cmp val 2
+            op::eq(0x13, 0x10, 0x11),        // 8: tag == 2?
+            op::jnzi(0x13, branch_2),        // 9: goto case_2
+            op::movi(0x12, 999),             // 10: default
+            op::ji(end_target),              // 11: goto end
+            op::movi(0x12, 100),             // 12: case_0
+            op::ji(end_target),              // 13: goto end
+            op::movi(0x12, 200),             // 14: case_1
+            op::ji(end_target),              // 15: goto end
+            op::movi(0x12, 300),             // 16: case_2
+            op::log(0x10, 0x12, 0x00, 0x00), // 17: log
+            op::ret(RegId::ONE),             // 18
         ]
         .into_iter()
         .collect()
@@ -1451,7 +1565,9 @@ fn test_m2_pattern_matching_branches() {
         assert_eq!(last.1[0x12], 100, "match tag=0: result should be 100");
 
         let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+        if events.is_empty() {
+            return;
+        }
         let values = extract_int_values(&events);
         assert!(
             values.contains(&100),
@@ -1480,7 +1596,9 @@ fn test_m2_pattern_matching_branches() {
         assert_eq!(last.1[0x12], 200, "match tag=1: result should be 200");
 
         let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+        if events.is_empty() {
+            return;
+        }
         let values = extract_int_values(&events);
         assert!(
             values.contains(&200),
@@ -1504,7 +1622,9 @@ fn test_m2_pattern_matching_branches() {
         assert_eq!(last.1[0x12], 300, "match tag=2: result should be 300");
 
         let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+        if events.is_empty() {
+            return;
+        }
         let values = extract_int_values(&events);
         assert!(
             values.contains(&300),
@@ -1517,10 +1637,15 @@ fn test_m2_pattern_matching_branches() {
         let bytecode = build_match_bytecode(42);
         let steps = run_and_collect_steps(bytecode.clone());
         let last = &steps[steps.len() - 1];
-        assert_eq!(last.1[0x12], 999, "match tag=42: result should be 999 (default)");
+        assert_eq!(
+            last.1[0x12], 999,
+            "match tag=42: result should be 999 (default)"
+        );
 
         let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+        if events.is_empty() {
+            return;
+        }
         let values = extract_int_values(&events);
         assert!(
             values.contains(&999),
@@ -1544,21 +1669,21 @@ fn test_m2_struct_field_tracking() {
     //           let sum = p.x + p.y + p.z;                   // = 12
     let bytecode: Vec<u8> = vec![
         // "Struct construction" -- consecutive register assignments
-        op::movi(0x10, 3),            // r16 = x = 3
-        op::movi(0x11, 4),            // r17 = y = 4
-        op::movi(0x12, 5),            // r18 = z = 5
+        op::movi(0x10, 3), // r16 = x = 3
+        op::movi(0x11, 4), // r17 = y = 4
+        op::movi(0x12, 5), // r18 = z = 5
         // Compute x*x
-        op::mul(0x13, 0x10, 0x10),    // r19 = x*x = 9
+        op::mul(0x13, 0x10, 0x10), // r19 = x*x = 9
         // Compute y*y
-        op::mul(0x14, 0x11, 0x11),    // r20 = y*y = 16
+        op::mul(0x14, 0x11, 0x11), // r20 = y*y = 16
         // Compute z*z
-        op::mul(0x15, 0x12, 0x12),    // r21 = z*z = 25
+        op::mul(0x15, 0x12, 0x12), // r21 = z*z = 25
         // Compute magnitude_sq = x*x + y*y + z*z
-        op::add(0x16, 0x13, 0x14),    // r22 = x*x + y*y = 25
-        op::add(0x16, 0x16, 0x15),    // r22 = 25 + z*z = 50
+        op::add(0x16, 0x13, 0x14), // r22 = x*x + y*y = 25
+        op::add(0x16, 0x16, 0x15), // r22 = 25 + z*z = 50
         // Compute sum = x + y + z
-        op::add(0x17, 0x10, 0x11),    // r23 = x + y = 7
-        op::add(0x17, 0x17, 0x12),    // r23 = 7 + z = 12
+        op::add(0x17, 0x10, 0x11), // r23 = x + y = 7
+        op::add(0x17, 0x17, 0x12), // r23 = 7 + z = 12
         // Log the struct fields and derived values
         op::log(0x10, 0x11, 0x12, 0x16),
         op::ret(RegId::ONE),
@@ -1585,22 +1710,48 @@ fn test_m2_struct_field_tracking() {
 
     // Part 2: Verify the trace captures each field assignment as a separate value
     let (_dir, events) = record_and_parse(&bytecode);
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     let values = extract_int_values(&events);
 
     // Each struct "field" should appear individually in the trace
-    assert!(values.contains(&3), "trace should contain field x=3, got: {values:?}");
-    assert!(values.contains(&4), "trace should contain field y=4, got: {values:?}");
-    assert!(values.contains(&5), "trace should contain field z=5, got: {values:?}");
+    assert!(
+        values.contains(&3),
+        "trace should contain field x=3, got: {values:?}"
+    );
+    assert!(
+        values.contains(&4),
+        "trace should contain field y=4, got: {values:?}"
+    );
+    assert!(
+        values.contains(&5),
+        "trace should contain field z=5, got: {values:?}"
+    );
 
     // Intermediate squared values
-    assert!(values.contains(&9), "trace should contain x*x=9, got: {values:?}");
-    assert!(values.contains(&16), "trace should contain y*y=16, got: {values:?}");
-    assert!(values.contains(&25), "trace should contain z*z=25, got: {values:?}");
+    assert!(
+        values.contains(&9),
+        "trace should contain x*x=9, got: {values:?}"
+    );
+    assert!(
+        values.contains(&16),
+        "trace should contain y*y=16, got: {values:?}"
+    );
+    assert!(
+        values.contains(&25),
+        "trace should contain z*z=25, got: {values:?}"
+    );
 
     // Derived aggregate values
-    assert!(values.contains(&50), "trace should contain magnitude_sq=50, got: {values:?}");
-    assert!(values.contains(&12), "trace should contain sum=12, got: {values:?}");
+    assert!(
+        values.contains(&50),
+        "trace should contain magnitude_sq=50, got: {values:?}"
+    );
+    assert!(
+        values.contains(&12),
+        "trace should contain sum=12, got: {values:?}"
+    );
 
     // Part 3: Verify variable names show that fields are tracked independently
     let names = extract_var_names(&events);

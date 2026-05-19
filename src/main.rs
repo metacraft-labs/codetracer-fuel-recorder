@@ -273,36 +273,12 @@ fn record(args: RecordArgs) -> Result<()> {
     // Recording from Forc.toml not yet implemented (needs forc-pkg)
     eprintln!("Recording not yet implemented for Sway projects (use --bytecode for raw bytecode)");
 
-    // Create output directory and write placeholder files (backwards compat)
+    // Create output directory (no placeholder sidecars — v3 emits real
+    // CTFS containers from `record_bytecode` only).
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
-    let metadata = serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "recorder": "codetracer-fuel-recorder",
-        "format": "ctfs",
-        "status": "placeholder"
-    });
-
-    let metadata_path = out_dir.join("trace_metadata.json");
-    std::fs::write(
-        &metadata_path,
-        serde_json::to_string_pretty(&metadata).unwrap(),
-    )
-    .with_context(|| format!("failed to write {}", metadata_path.display()))?;
-
-    let paths = serde_json::json!({
-        "project_dir": project_dir.to_string_lossy(),
-        "sources": []
-    });
-
-    let paths_path = out_dir.join("trace_paths.json");
-    std::fs::write(&paths_path, serde_json::to_string_pretty(&paths).unwrap())
-        .with_context(|| format!("failed to write {}", paths_path.display()))?;
-
     eprintln!("Trace output written to {}", out_dir.display());
-    eprintln!("  trace_metadata.json");
-    eprintln!("  trace_paths.json");
 
     Ok(())
 }
