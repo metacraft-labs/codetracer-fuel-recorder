@@ -1240,7 +1240,8 @@ fn test_collections_test_value_kinds_present() {
             }
         }
     }
-    for want in ["Sequence"] {
+    {
+        let want = "Sequence";
         assert!(
             kinds.contains(want),
             "expected {want} ValueRecord variant in collections trace; got {kinds:?}"

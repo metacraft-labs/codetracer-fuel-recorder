@@ -147,11 +147,10 @@ impl ContractCallTracker {
         let contract_id = self.current_contract_id();
 
         // Try contract-specific source map first
-        if let Some(source_map) = self.source_maps.get(contract_id) {
-            if let Some((path, line)) = source_map.lookup(opcode_index) {
+        if let Some(source_map) = self.source_maps.get(contract_id)
+            && let Some((path, line)) = source_map.lookup(opcode_index) {
                 return (path, line);
             }
-        }
 
         // Fall back to default source map
         if let Some((path, line)) = default_source_map.lookup(opcode_index) {

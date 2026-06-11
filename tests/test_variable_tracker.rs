@@ -267,7 +267,7 @@ fn test_full_pipeline_with_tracker() {
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "ct"))
         .collect();
     assert!(!ct_files.is_empty(), "expected .ct file");
     let ct_content = std::fs::read(&ct_files[0]).unwrap();

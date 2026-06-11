@@ -30,6 +30,7 @@ use crate::variable_tracker::VariableTracker;
 ///     (control-flow fixture: gap up to 3)
 ///   * `while` loop back-edges to the loop header (while_loop fixture:
 ///     gap = 4 between L8 and L4)
+///
 /// while still flagging the wide gaps the `nested_calls` fixture uses
 /// to carve outer/middle/inner into three clusters of decade-aligned
 /// line ranges (gaps of 8 and 9 between L12-L20 and L21-L30).
@@ -67,20 +68,16 @@ fn synthetic_call_name(index: usize) -> String {
 /// `predicate_result` attached to the final step.  See
 /// `tests/test_tracer.rs::test_predicate_test_via_ct_print_full`
 /// for the regression pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProgramKind {
     /// Default Sway *script* shape — `<toplevel>` + `main` entry point.
+    #[default]
     Script,
     /// Sway *predicate* shape — `<toplevel>` + `predicate` entry point;
     /// surfaces `predicate_result` `ValueRecord::Bool` on the final step.
     Predicate,
 }
 
-impl Default for ProgramKind {
-    fn default() -> Self {
-        Self::Script
-    }
-}
 
 /// The main recorder that processes FuelVM execution events into CodeTracer
 /// trace format.
@@ -110,12 +107,12 @@ pub struct FuelRecorder {
     /// This is the hook that drives the M10 Round 5 fixtures whose
     /// strict pin asserts on impl-qualified / mangled / cross-contract
     /// call names:
-    ///   * `trait_impl_test`        — `<Hello as Greet>::greet` /
-    ///                                 `<Goodbye as Greet>::greet`
+    ///   * `trait_impl_test`  — `<Hello as Greet>::greet` /
+    ///     `<Goodbye as Greet>::greet`
     ///   * `generic_function_test`  — `add::<u32>` / `add::<u64>`
-    ///   * `cross_contract_call_test`
-    ///                              — `contract:0x<addr>...method=<sel>`
-    ///   * `ref_param_test`         — `mutate`
+    ///   * `cross_contract_call_test`  —
+    ///     `contract:0x<addr>...method=<sel>`
+    ///   * `ref_param_test`  — `mutate`
     pub call_name_overrides: Vec<String>,
 }
 
@@ -205,8 +202,26 @@ impl FuelRecorder {
         TraceWriter::begin_writing_trace_events(&mut *writer, &events_path)
             .map_err(|e| eyre::eyre!("{e}"))?;
 
-        // Start the trace
+        // Start the trace.
+        //
+        // ``TraceWriter::start`` (CTFS path) only emits a Step at
+        // line 1 — it does NOT register a ``<toplevel>`` function or
+        // open a Call frame, despite what older comments in this and
+        // sibling recorder repos used to claim.  We therefore have to
+        // emit the Function entry + Call ourselves so the recorded
+        // event stream actually contains a ``<toplevel>`` Call (the
+        // WDIO smoke test ``finds <toplevel> in the calltrace`` and
+        // every downstream consumer assume the frame exists).  The
+        // matching ``register_return`` at the very end of
+        // ``record_trace`` closes this frame.
         TraceWriter::start(&mut *writer, source_path, Line(1));
+        let toplevel_fn = TraceWriter::ensure_function_id(
+            &mut *writer,
+            "<toplevel>",
+            source_path,
+            Line(1),
+        );
+        TraceWriter::register_call(&mut *writer, toplevel_fn, vec![]);
 
         // Register the "u64" type (after start, so that "None" gets TypeId(0))
         let u64_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u64");
@@ -493,8 +508,8 @@ impl FuelRecorder {
         //                               `configurable { ... }` block)
         let mut emit_b256_decoder = false;
         let mut emit_configurable_decoder = false;
-        if let Some(abi) = &self.abi {
-            if let Some(out_type) = abi.function_output_type("main") {
+        if let Some(abi) = &self.abi
+            && let Some(out_type) = abi.function_output_type("main") {
                 let trimmed = out_type.trim();
                 if trimmed == "(u64, b256, bool)" {
                     emit_tuple_decoder = true;
@@ -522,7 +537,6 @@ impl FuelRecorder {
                     emit_configurable_decoder = true;
                 }
             }
-        }
 
         // Create interpreter and run with single-stepping
         let interp = FuelInterpreter::new(bytecode)?;
@@ -613,11 +627,9 @@ impl FuelRecorder {
                 if let Receipt::LogData {
                     data: Some(bytes), ..
                 } = receipt
-                {
-                    if !bytes.is_empty() && step_logd_payload.is_none() {
+                    && !bytes.is_empty() && step_logd_payload.is_none() {
                         step_logd_payload = Some(bytes.clone());
                     }
-                }
                 emit_receipt_special_event(&mut *writer, receipt);
             }
             prev_receipt_count = step.receipts.len();
@@ -1645,9 +1657,9 @@ fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
     }
 }
 
-/// Truncate a long hex-formatted identifier (`0x…`) to the leading 10 chars
-/// + `…` so the `metadata` slot of a `register_special_event` record stays
-/// short.
+/// Truncate a long hex-formatted identifier (`0x…`) to the leading 10
+/// chars + `…` so the `metadata` slot of a `register_special_event`
+/// record stays short.
 ///
 /// Mirrors the `truncate_contract_id` helper used elsewhere in the
 /// recorder for switch-event display names.
