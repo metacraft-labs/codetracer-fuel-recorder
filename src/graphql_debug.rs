@@ -233,7 +233,7 @@ pub fn parse_memory_response(response: &GraphQLResponse) -> Option<Vec<u8>> {
 /// Decode a hex string to bytes.
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);

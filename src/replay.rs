@@ -603,11 +603,10 @@ pub fn parse_dry_run_response(response: &GraphQLResponse) -> Result<DryRunResult
 
     for item in &receipts_arr {
         // Check if this item has a programState (the last element often does)
-        if let Some(ps) = item.get("programState") {
-            if let Some(ps_data) = ps.get("data") {
+        if let Some(ps) = item.get("programState")
+            && let Some(ps_data) = ps.get("data") {
                 program_state = ps_data.as_str().map(String::from);
             }
-        }
 
         let receipt_type = item
             .get("receiptType")
@@ -640,11 +639,10 @@ pub fn parse_dry_run_response(response: &GraphQLResponse) -> Result<DryRunResult
 pub fn extract_contract_ids(inputs: &[TransactionInput]) -> Vec<String> {
     let mut ids = Vec::new();
     for input in inputs {
-        if let TransactionInput::InputContract { contract_id, .. } = input {
-            if !contract_id.is_empty() && !ids.contains(contract_id) {
+        if let TransactionInput::InputContract { contract_id, .. } = input
+            && !contract_id.is_empty() && !ids.contains(contract_id) {
                 ids.push(contract_id.clone());
             }
-        }
     }
     ids
 }
@@ -682,11 +680,10 @@ pub fn find_source_maps(source_dir: &Path, _contract_id: &str) -> Option<Contrac
     let mut abi_files = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.ends_with("-abi.json") {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.ends_with("-abi.json") {
                 abi_files.push(path);
             }
-        }
     }
 
     if abi_files.is_empty() {
@@ -715,8 +712,8 @@ pub fn find_source_maps(source_dir: &Path, _contract_id: &str) -> Option<Contrac
     // Look for source files
     let src_dir = source_dir.join("src");
     let mut source_files = Vec::new();
-    if src_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&src_dir) {
+    if src_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(&src_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("sw") {
@@ -724,7 +721,6 @@ pub fn find_source_maps(source_dir: &Path, _contract_id: &str) -> Option<Contrac
                 }
             }
         }
-    }
 
     Some(ContractSourceInfo {
         contract_id: _contract_id.to_string(),
@@ -785,12 +781,11 @@ impl FuelGraphQLClient {
             .with_context(|| "failed to parse GraphQL response")?;
 
         // Check for GraphQL-level errors
-        if let Some(errors) = &response.errors {
-            if !errors.is_empty() {
+        if let Some(errors) = &response.errors
+            && !errors.is_empty() {
                 let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
                 return Err(eyre!("GraphQL errors: {}", msgs.join("; ")));
             }
-        }
 
         Ok(response)
     }
