@@ -1773,7 +1773,17 @@ fn export_fixture() {
     };
     let out_dir = out_dir.as_path();
 
-    let source_path = PathBuf::from("flow_test.sw");
+    // VS Code's DAP source resolver opens trace files via
+    // ``debug:<source-path>?session=…`` and refuses to resolve a
+    // bare relative path (``debug:./flow_test.sw`` errors with
+    // ``Unable to resolve resource``).  Anchor ``source_path`` on
+    // the absolute fixture directory so the source URI is
+    // self-describing — the codetracer-vscode-extension fixture
+    // script (``scripts/prepare-sway-fixture.sh``) copies the real
+    // Sway source to ``<out_dir>/flow_test.sw`` after we run, so
+    // an absolute path against ``out_dir`` matches the file the
+    // extension serves at replay time.
+    let source_path = out_dir.join("flow_test.sw");
     let bytecode = simple_arithmetic_bytecode();
     let num_instructions = bytecode.len() / 4;
     let source_map = synthetic_source_map(&source_path, num_instructions);
