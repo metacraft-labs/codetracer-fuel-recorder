@@ -6,6 +6,21 @@ authors = ["Metacraft Labs Ltd"]
 description = "CodeTracer recorder for Sway smart contracts (FuelVM)"
 license = "Apache-2.0"
 
+# Stylistic clippy 1.93 lints that the test-fixture helpers (synthetic
+# source maps, vector-of-tuple builders) and doc comments routinely trip.
+# Same workspace-allow pattern as codetracer-move-recorder /
+# codetracer-solana-recorder.  Source-level fixes for the doc-comment
+# `collapsible_if` / `is_multiple_of` cases are already in place; this
+# block covers the test-only `vec_init_then_push`, `&PathBuf`, and
+# `type_complexity` warnings that don't meaningfully apply to test
+# fixtures.
+[lints.clippy]
+vec_init_then_push = "allow"
+type_complexity = "allow"
+ptr_arg = "allow"
+doc_overindented_list_items = "allow"
+doc_list_item_without_indentation = "allow"
+
 [dependencies]
 # CodeTracer trace format
 codetracer_trace_types = { path = "../codetracer-trace-format/codetracer_trace_types" }
