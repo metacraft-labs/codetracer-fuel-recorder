@@ -144,22 +144,40 @@ impl ContractCallTracker {
         default_source_map: &'a SwaySourceMap,
         default_source_path: &'a Path,
     ) -> (&'a Path, u32) {
+        let (path, line, _col) =
+            self.lookup_source_with_column(opcode_index, default_source_map, default_source_path);
+        (path, line)
+    }
+
+    /// Column-aware variant of [`Self::lookup_source`].  The trailing element of
+    /// the returned tuple is a 1-based byte column within the line, or `None`
+    /// when the underlying source map does not carry column information.  Sway's
+    /// compiler does not currently surface DWARF-style column data, so the
+    /// synthetic one-instruction-per-line maps the recorder builds today return
+    /// `None` for every step — the recorder still threads that through
+    /// `register_step_with_column` so the column-aware writer path lights up.
+    pub fn lookup_source_with_column<'a>(
+        &'a self,
+        opcode_index: usize,
+        default_source_map: &'a SwaySourceMap,
+        default_source_path: &'a Path,
+    ) -> (&'a Path, u32, Option<u32>) {
         let contract_id = self.current_contract_id();
 
         // Try contract-specific source map first
         if let Some(source_map) = self.source_maps.get(contract_id) {
-            if let Some((path, line)) = source_map.lookup(opcode_index) {
-                return (path, line);
+            if let Some((path, line, col)) = source_map.lookup_with_column(opcode_index) {
+                return (path, line, col);
             }
         }
 
         // Fall back to default source map
-        if let Some((path, line)) = default_source_map.lookup(opcode_index) {
-            return (path, line);
+        if let Some((path, line, col)) = default_source_map.lookup_with_column(opcode_index) {
+            return (path, line, col);
         }
 
-        // Last resort: use default path with opcode index as line
-        (default_source_path, (opcode_index + 1) as u32)
+        // Last resort: use default path with opcode index as line; no column data
+        (default_source_path, (opcode_index + 1) as u32, None)
     }
 
     /// Get the source path for the current contract context.
