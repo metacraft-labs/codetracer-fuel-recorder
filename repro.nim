@@ -1,59 +1,144 @@
-## Reprobuild dev env for codetracer-fuel-recorder.
+## Reprobuild dev env + build recipe for codetracer-fuel-recorder.
 ##
 ## Mirrors the dev shell declared in ``flake.nix`` (Linux/macOS) and
-## the Windows DIY env declared in ``env.ps1``. ``repro exec just
-## <target>`` then reproduces CI on any supported host -- the same
-## CI workflow re-plays this env via the shared ``setup-dev-env``
-## composite action defined in
-## ``metacraft-labs/metacraft-github-actions``. See
-## ``metacraft-dev-guidelines/policies/ci-shared-dev-env.md`` for
-## the rollout shape.
+## the Windows DIY env declared in ``env.ps1``. ``repro build`` /
+## ``repro test`` reproduce the same artefacts and the same test set
+## that ``just build`` / ``just test`` produce today.
 ##
-## Status: Phase 1 (additive). The Nix flake and ``env.ps1`` remain
-## the supported dev-shell entry points; reprobuild joins them as a
-## third env-flavor candidate on the CI matrix once this file is
-## wired into ``.github/workflows/ci.yml``.
+## Per ``codetracer-specs/Repo-Requirements.md`` §2.8 the recipe
+## expresses build and test execution NATIVELY through typed-tool
+## edges (`cargo.build`, `cargo.test`). It does NOT delegate to
+## `shell(command = "bash scripts/...")` wrappers — delegation
+## defeats the engine's incremental-build, action-cache, per-test
+## invalidation, and the CI sharding the engine grows into per
+## ``reprobuild-specs/CI-Sharding.md``.
 ##
-## Fuel-specific note: the test corpus compiles Sway sources through
-## the upstream ``forc`` driver at test time, so it is declared in
-## ``uses:``. ``forc`` is pinned to 0.70.3 -- matching
-## ``mcl-blockchain``'s pin -- and the release tarball bundles
-## ``forc-fmt``, ``forc-lsp``, ``forc-deploy``, and ``forc-run``
-## alongside the main ``forc`` binary, all under one ``bin/`` prefix.
+## On Windows the recipe drives real reprobuild tool provisioning via
+## the tarball entries the ``uses:`` packages declare (cargo, rustc,
+## rustfmt, nim, nimble, capnp). On Linux/macOS the Nix flake
+## continues to supply the same toolchain. Either path produces
+## byte-equivalent build outputs and the same test pass/fail set —
+## CI cross-checks this through the side-by-side `ci.yml` (nix) +
+## `ci-reprobuild.yml` (reprobuild) flow per Repo-Requirements §2.9.
+##
+## Fuel: tests compile Sway via the pinned forc 0.70.3.
 
 import repro_project_dsl
 
 package codetracer_fuel_recorder:
   uses:
-    # Rust toolchain: driver, build, formatter, linter.
+    # Rust toolchain — declared by version so the tarball-direct
+    # provisioning entries in repro_dsl_stdlib/packages/cargo.nim /
+    # rustc.nim / rustfmt.nim resolve on Windows. On Linux/macOS the
+    # nix flake supplies the same versions.
     "rustc >=1.85"
     "cargo >=1.85"
-    "rustfmt"
-    "clippy"
 
-    # Nim toolchain -- codetracer_trace_writer_nim's build.rs
-    # compiles a static library at cargo build time.
+    # Nim toolchain — codetracer_trace_writer_nim's build.rs compiles
+    # a static library at cargo build time.
     "nim >=2.2 <3.0"
     "nimble"
 
     # Cap'n Proto schema compiler used by the recorder's build.rs.
     "capnp"
 
-    # ``just`` runs the existing build/test/lint entry points.
-    "just"
-
     # libzstd headers + library, needed when linking the Nim FFI
     # static library into the cargo build.
     "zstd"
 
-    # pkg-config + OpenSSL -- openssl-sys consults pkg-config to
-    # find OpenSSL on Linux/macOS.
-    "pkg-config"
-    "openssl"
+    # pkg-config + OpenSSL — openssl-sys consults pkg-config to find
+    # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
+    # feature instead so neither is on the windows toolchain floor.
+    when not defined(windows):
+      "pkg-config"
+      "openssl"
 
-    # Fuel/Sway compiler driver -- compiles ``.sw`` source for the
-    # test corpus.
-    "forc"
+    # Language-specific compiler / runtime tools. ``forc`` (the Sway
+    # compiler) is Linux/macOS-only — FuelLabs/sway publishes no
+    # Windows artefact and the from-source build fails on Windows (see
+    # ``repro_dsl_stdlib/packages/forc.nim`` for the upstream-gap
+    # narrative). The recipe gates ``forc`` so the ``default`` build
+    # closure (cargo build — which does NOT need forc) still resolves
+    # on Windows. The sway-compile test edges below are correspondingly
+    # gated; on Windows ``repro build test`` skips those cases cleanly.
+    when not defined(windows):
+      "forc"
+
+  executable codetracerFuelRecorder:
+    name: "codetracer-fuel-recorder"
 
   devEnv:
     activity "default"
+
+  build:
+    # ---- Primary build edge (the `default` collection) ----------------
+    #
+    # Native cargo build for the recorder binary. Enrolled into the
+    # conventional ``default`` collection per
+    # reprobuild-specs/Build-Graph-Collections.md §"`default`"; this
+    # makes ``repro build`` (no positional target) materialise this
+    # edge's closure.
+    const binarySuffix = (when defined(windows): ".exe" else: "")
+    const recorderBinary =
+      "target/release/codetracer-fuel-recorder" & binarySuffix
+
+    let recorderBuild = cargo.build(
+      locked = true,
+      release = true,
+      actionId = "codetracer-fuel-recorder.cargo-build",
+      extraInputs = @[
+        "Cargo.toml", "Cargo.lock",
+        "src", "build.rs"
+      ],
+      extraOutputs = @[recorderBinary])
+    discard collect("default", @[recorderBuild])
+
+    # ---- Test-binary build + run edges (the `test` collection) -------
+    #
+    # Two-stage shape per Repo-Requirements.md §2.8: `cargo.test(noRun =
+    # true)` builds every cargo test binary into
+    # `target/debug/deps/<crate>-<hash>` (the engine tracks the deps
+    # directory as the build edge's effect set because the hashed
+    # filename floats with input content); `cargo.test(noRun = false)`
+    # then runs the binaries in one cargo invocation. The execute edge
+    # depends on the build edge so the engine only re-runs tests when
+    # an input changed since the last successful execution.
+    #
+    # Per-test execute edges fall out automatically once the
+    # ct-test-runner cargo adapter lands per
+    # reprobuild-specs/Test-Edges-And-Parallel-Runner.milestones.org
+    # §M4 — the whole-binary edge becomes a fan-out point without
+    # changing this recipe.
+    #
+    # Windows note: ``forc`` is gated above (it's
+    # platform-unsupported per ``repro_dsl_stdlib/packages/forc.nim``).
+    # The cargo test binary still compiles on Windows because the
+    # build closure here does not include ``test-programs/`` (the
+    # ``.sw`` fixtures need ``forc build`` to materialise the
+    # ``.bin`` files those test cases consume). On Windows the
+    # script_arith / contract_abi_dispatch / counter test cases hit
+    # their fixture-missing guard and skip cleanly at runtime; the
+    # remaining test cases (the fuel-asm-built ones, ``ct print``
+    # smoke tests, CTFS-header asserts) pass exactly as on Linux.
+
+    let testsBuild = cargo.test(
+      locked = true,
+      noRun = true,
+      actionId = "codetracer-fuel-recorder.cargo-test-build",
+      extraInputs = @[
+        "Cargo.toml", "Cargo.lock",
+        "src", "build.rs", "tests"
+      ],
+      extraOutputs = @["target/debug/deps"])
+
+    let testsRun = cargo.test(
+      locked = true,
+      actionId = "codetracer-fuel-recorder.cargo-test-run",
+      after = @[testsBuild.action],
+      extraInputs = @[
+        "Cargo.toml", "Cargo.lock",
+        "src", "tests",
+        "target/debug/deps"
+      ])
+
+    discard collect("test", @[testsRun.action])
