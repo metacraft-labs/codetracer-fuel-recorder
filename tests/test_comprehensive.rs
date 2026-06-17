@@ -46,7 +46,7 @@ fn record_and_parse(bytecode: &[u8]) -> (tempfile::TempDir, Vec<serde_json::Valu
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "ct"))
         .collect();
     assert!(!ct_files.is_empty(), "expected .ct file");
     let content = std::fs::read(&ct_files[0]).unwrap();
@@ -575,11 +575,10 @@ fn test_log_instruction() {
     interp
         .run_with_callback(|step: &StepState| {
             for receipt in &step.receipts {
-                if let fuel_tx::Receipt::Log { ra, rb, rc, rd, .. } = receipt {
-                    if *ra == 111 && *rb == 222 && *rc == 333 && *rd == 444 {
+                if let fuel_tx::Receipt::Log { ra, rb, rc, rd, .. } = receipt
+                    && *ra == 111 && *rb == 222 && *rc == 333 && *rd == 444 {
                         saw_log_receipt = true;
                     }
-                }
             }
         })
         .unwrap();
@@ -623,11 +622,10 @@ fn test_logd_instruction() {
     interp
         .run_with_callback(|step: &StepState| {
             for receipt in &step.receipts {
-                if let fuel_tx::Receipt::LogData { data, .. } = receipt {
-                    if data.is_some() {
+                if let fuel_tx::Receipt::LogData { data, .. } = receipt
+                    && data.is_some() {
                         saw_logd = true;
                     }
-                }
             }
         })
         .unwrap();
@@ -699,7 +697,7 @@ fn test_simple_branch() {
     let step_count = count_steps(&events);
     // Instructions 4 and 5 are skipped, so we should see about 7 steps
     assert!(
-        step_count >= 5 && step_count <= 9,
+        (5..=9).contains(&step_count),
         "branch should produce 5-9 step events, got {step_count}"
     );
 }
@@ -1786,7 +1784,7 @@ fn test_m2_struct_field_tracking() {
     // Verify step count is reasonable (12 instructions = 12-13 steps)
     let step_count = count_steps(&events);
     assert!(
-        step_count >= 11 && step_count <= 14,
+        (11..=14).contains(&step_count),
         "should have 11-14 step events for 12-instruction program, got {step_count}"
     );
 }
