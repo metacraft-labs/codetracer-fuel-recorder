@@ -116,37 +116,6 @@ pub struct FuelRecorder {
     pub call_name_overrides: Vec<String>,
 }
 
-/// M-fuel: register every unique source path the source map references with
-/// the writer's column-aware `paths.dat` Layout A entry point, exactly once
-/// each.  Pass an empty `line_lengths` slice — Sway does not yet emit the
-/// per-line UTF-8 byte counts the reader would need to resolve writer-side
-/// global byte positions back to (line, column) pairs, and the Nim writer
-/// treats `line_count == 0` as "no per-line data; column resolution falls
-/// back to `None` at read time".  Errors are logged and skipped: the trace
-/// remains usable, just without resolvable columns on the offending path.
-/// Mirrors `EvmRecorder::ensure_path_with_line_lengths` (which does have
-/// real line-length data thanks to Solidity's source-file payload).
-fn register_paths_for_column_aware_mode(
-    writer: &mut dyn TraceWriter,
-    source_map: &SwaySourceMap,
-    fallback_path: &Path,
-) {
-    let mut paths = source_map.unique_paths();
-    if !paths.iter().any(|p| p == fallback_path) {
-        paths.push(fallback_path.to_path_buf());
-    }
-    for path in &paths {
-        if let Err(err) = TraceWriter::register_path_with_line_lengths(writer, path, &[]) {
-            eprintln!(
-                "[codetracer-fuel-recorder] register_path_with_line_lengths failed for {}: {} \
-                 (column resolution will fall back to None for this file)",
-                path.display(),
-                err,
-            );
-        }
-    }
-}
-
 impl FuelRecorder {
     /// Create a new FuelRecorder.  The writer is always CTFS; there is no
     /// legacy-format escape hatch.
@@ -232,21 +201,6 @@ impl FuelRecorder {
         // Initialize trace files
         TraceWriter::begin_writing_trace_events(&mut *writer, &events_path)
             .map_err(|e| eyre::eyre!("{e}"))?;
-
-        // M-fuel: opt the writer into column-aware step encoding before
-        // the first `start` / `register_step` call. Sticky for the
-        // lifetime of the trace; gates the writer's `DeltaColumn` (tag
-        // 0x07) emission plus the `meta.dat` bit 4 flag. Sway does not
-        // currently emit DWARF-style column info (sway#2055) so the
-        // call sites below forward `None`; the flag still flips so
-        // downstream tooling lights up.
-        TraceWriter::enable_column_aware_steps(&mut *writer);
-
-        // Register every source path with its per-line byte-length
-        // table (paths.dat Layout A). Must happen before `start` so
-        // the path id is interned with its line-length table; later
-        // re-registration for an already-interned path is a no-op.
-        register_paths_for_column_aware_mode(&mut *writer, source_map, source_path);
 
         // Start the trace.
         //
@@ -693,16 +647,9 @@ impl FuelRecorder {
                 emit_storage_opcode_event(&mut *writer, instr, &step.registers);
             }
 
-            // Look up source location (and optional 1-based column) using the
-            // contract-aware tracker.  Sway doesn't yet emit column data so
-            // `column` is universally `None` today; the recorder forwards it
-            // through `register_step_with_column` regardless so the
-            // column-aware writer path stays exercised.
-            let (lookup_path, line, column) = call_tracker.lookup_source_with_column(
-                opcode_index,
-                source_map,
-                source_path,
-            );
+            // Look up source location using contract-aware tracker
+            let (lookup_path, line) =
+                call_tracker.lookup_source(opcode_index, source_map, source_path);
             let step_path = lookup_path.to_path_buf();
 
             // Determine whether this step crosses a synthesised
@@ -733,12 +680,7 @@ impl FuelRecorder {
             // captures the boundary at exactly the right step index
             // for the soon-to-be-emitted call/return.
             if prev_line != Some(line) {
-                TraceWriter::register_step_with_column(
-                    &mut *writer,
-                    &step_path,
-                    Line(line as i64),
-                    column.map(|c| Line(c as i64)),
-                );
+                TraceWriter::register_step(&mut *writer, &step_path, Line(line as i64));
                 prev_line = Some(line);
             }
 
