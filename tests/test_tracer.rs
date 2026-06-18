@@ -238,15 +238,7 @@ fn test_fuel_single_step_trace() {
 /// integer value at the step where the FuelVM writes it.
 #[test]
 fn test_recorded_trace_via_ct_print_json() {
-    let ct_print = ct_print_path();
-    if !ct_print.exists() {
-        eprintln!(
-            "SKIP: ct-print not found at {} — only available within the \
-             metacraft workspace where codetracer-trace-format-nim is a sibling.",
-            ct_print.display()
-        );
-        return;
-    }
+    let ct_print = require_ct_print("test_recorded_trace_via_ct_print_json");
 
     let temp_dir = run_simple_trace();
     let out_dir = temp_dir.path().join("traces");
@@ -366,8 +358,8 @@ fn test_recorded_trace_via_ct_print_json() {
     );
     assert_eq!(
         counts["calls"].as_u64(),
-        Some(0),
-        "expected 0 call events (synthetic fuel-asm bytecode has no call graph); counts={counts}",
+        Some(1),
+        "expected 1 call events (synthetic fuel-asm bytecode has no call graph); counts={counts}",
     );
 
     let events = doc["events"].as_array().expect("events array");
@@ -381,10 +373,12 @@ fn test_recorded_trace_via_ct_print_json() {
         .filter(|e| e["kind"] == "call_entry")
         .filter_map(|e| e["function"].as_str())
         .collect();
-    assert!(
-        call_sequence.is_empty(),
-        "expected no call_entry events for synthetic fuel-asm bytecode; got {:?}",
-        call_sequence
+    assert_eq!(
+        call_sequence,
+        vec!["<toplevel>"],
+        "synthetic fuel-asm bytecode must surface exactly the synthetic \
+         `<toplevel>` call_entry (no source-level call graph beyond the \
+         recorder's outer frame); got {call_sequence:?}"
     );
 
     // ----- Exact decoded variable values ------------------------------
@@ -496,38 +490,35 @@ fn test_recorded_trace_via_ct_print_json() {
 // parallel `#[ignore]`d assertion captures the spec-correct
 // expectation so it surfaces the moment the recorder catches up.
 
-/// Skip-helper: returns `Some(path)` to ct-print or logs a clear
-/// `SKIP:` diagnostic and returns `None`.  The
-/// `verify-cli-convention-no-silent-skip.sh` script greps for the
-/// literal `SKIP:` token, so silent skips remain forbidden.
-fn ct_print_or_skip(test_name: &str) -> Option<PathBuf> {
+/// Returns the path to ct-print or panics with a clear diagnostic.
+/// Per the "no graceful skips" policy we used to silently bail when
+/// the binary wasn't built — that hid Windows-test failures behind
+/// Linux CI runs where ct-print isn't part of the recorder build.
+/// The fix is to provision ct-print, not to weaken the test.
+fn require_ct_print(test_name: &str) -> PathBuf {
     let p = ct_print_path();
-    if !p.exists() {
-        eprintln!(
-            "SKIP: {test_name} requires ct-print at {} — only available \
-             within the metacraft workspace where codetracer-trace-format-nim \
-             is a sibling.",
-            p.display()
-        );
-        return None;
-    }
-    Some(p)
+    assert!(
+        p.exists(),
+        "ct-print binary required for '{test_name}' at {} — build it via \
+         reprobuild or the trace-format-nim sibling recipe; do not skip the \
+         test silently",
+        p.display()
+    );
+    p
 }
 
 /// Record a hand-rolled fuel-asm bytecode program and return the
 /// `ct-print --full --strip-paths` JSON document.  The synthetic
 /// source map maps each instruction at index `i` to source line
 /// `i + 1` of `<program_name>.sw` — the same one-instruction-per-line
-/// contract the existing arithmetic test uses.
-///
-/// Returns `None` when `ct-print` is unavailable (the caller has
-/// already emitted a `SKIP:` line via `ct_print_or_skip`).
+/// contract the existing arithmetic test uses.  Panics via
+/// [`require_ct_print`] if the binary isn't where we expect it.
 fn record_bytecode_and_dump_full(
     test_name: &str,
     program_name: &str,
     bytecode: Vec<u8>,
 ) -> Option<serde_json::Value> {
-    let ct_print = ct_print_or_skip(test_name)?;
+    let ct_print = require_ct_print(test_name);
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -737,7 +728,7 @@ fn test_control_flow_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     // ----- Path table -------------------------------------------------
     let paths: Vec<&str> = doc["paths"]
@@ -761,7 +752,7 @@ fn test_control_flow_test_via_ct_print_full() {
     // surfacing through fuel-asm input.
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -770,7 +761,7 @@ fn test_control_flow_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 8 steps + 1 io = 9 events.
-    assert_eq!(events.len(), 9, "events.len()");
+    assert_eq!(events.len(), 11, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Step-line order: covers the if/else branch decision --------
@@ -784,16 +775,24 @@ fn test_control_flow_test_via_ct_print_full() {
          (the not-taken then-branch at L5/L6 must NOT appear)"
     );
 
-    // ----- Call sequence: empty for raw bytecode ----------------------
-    let call_entries: Vec<_> = events
+    // ----- Call sequence: only the synthetic <toplevel> frame ---------
+    // Raw fuel-asm bytecode has no source-level call graph; the
+    // recorder still emits the synthetic `<toplevel>` Function + Call
+    // (since circom commit 4d3c05f's parallel — see recorder.rs at
+    // start) so the calltrace UI surfaces a real outer frame for the
+    // vscode-extension WDIO smoke test.  We pin exactly one
+    // call_entry whose function is `<toplevel>` and no further nested
+    // frames.
+    let call_entries: Vec<&str> = events
         .iter()
         .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
         .collect();
-    assert!(
-        call_entries.is_empty(),
-        "no call_entry events expected for raw fuel-asm bytecode; got {} \
-         events",
-        call_entries.len()
+    assert_eq!(
+        call_entries,
+        vec!["<toplevel>"],
+        "raw fuel-asm bytecode must surface exactly the synthetic \
+         `<toplevel>` call_entry (no source-level call graph)"
     );
 
     // ----- Decoded variables: r19 is 0 in the else branch -------------
@@ -921,10 +920,7 @@ fn nested_calls_source_map(source_path: &PathBuf) -> SwaySourceMap {
 
 #[test]
 fn test_nested_calls_test_via_ct_print_full() {
-    let ct_print = match ct_print_or_skip("test_nested_calls_test_via_ct_print_full") {
-        Some(p) => p,
-        None => return,
-    };
+    let ct_print = require_ct_print("test_nested_calls_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -972,7 +968,7 @@ fn test_nested_calls_test_via_ct_print_full() {
     // registered by `FuelRecorder::record`.  See the parallel
     // `test_nested_calls_test_emits_call_chain` regression pin and
     // `recorder.rs::synthetic_call_name` for the naming convention.
-    assert_eq!(functions, vec!["main", "outer", "middle", "inner"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "outer", "middle", "inner"]);
 
     let counts = &doc["counts"];
     // 9 step events: initial AbsoluteStep at line 10 + 8 transitions
@@ -983,7 +979,7 @@ fn test_nested_calls_test_via_ct_print_full() {
     // consecutive source lines with a gap > NESTED_CALL_LINE_GAP_THRESHOLD
     // separating it from the previous cluster.  See
     // `test_nested_calls_test_emits_call_chain` for the regression pin.
-    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -992,7 +988,7 @@ fn test_nested_calls_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 9 steps + 3 call_entry + 3 call_exit + 1 io = 16 events.
-    assert_eq!(events.len(), 16, "events.len()");
+    assert_eq!(events.len(), 18, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Step-line order pins the simulated call structure ----------
@@ -1061,10 +1057,7 @@ fn test_nested_calls_test_via_ct_print_full() {
 
 #[test]
 fn test_nested_calls_test_emits_call_chain() {
-    let ct_print = match ct_print_or_skip("test_nested_calls_test_emits_call_chain") {
-        Some(p) => p,
-        None => return,
-    };
+    let ct_print = require_ct_print("test_nested_calls_test_emits_call_chain");
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
     let source_path = temp_dir.path().join("nested_calls_test.sw");
@@ -1091,7 +1084,7 @@ fn test_nested_calls_test_emits_call_chain() {
         .collect();
     assert_eq!(
         call_entries,
-        vec!["outer", "middle", "inner"],
+        vec!["<toplevel>", "outer", "middle", "inner"],
         "expected three call_entry events for the simulated nested chain"
     );
 }
@@ -1149,7 +1142,7 @@ fn test_collections_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     // ----- counts -----------------------------------------------------
     // 9 step events: AbsoluteStep at line 1 + DeltaStep transitions
@@ -1157,7 +1150,7 @@ fn test_collections_test_via_ct_print_full() {
     // line transitions even though they reuse register r17).
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     // 1 io_event for the single LOGD receipt.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -1167,7 +1160,7 @@ fn test_collections_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 9 steps + 1 io = 10 events.
-    assert_eq!(events.len(), 10, "events.len()");
+    assert_eq!(events.len(), 12, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -1295,7 +1288,7 @@ fn test_error_paths_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 4 step events: AbsoluteStep at L1, plus three DeltaSteps at
@@ -1304,7 +1297,7 @@ fn test_error_paths_test_via_ct_print_full() {
     // the breakpoint at the RVRT instruction, *then* the VM
     // transitions to ProgramState::Revert).
     assert_eq!(counts["steps"].as_u64(), Some(4), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     // Exactly 1 error io_event: the terminal `Receipt::Revert` drained
     // after the last single-step breakpoint and routed through
     // `EventLogKind::Error`.  The trailing `Receipt::ScriptResult` is
@@ -1320,7 +1313,7 @@ fn test_error_paths_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 4 steps + 1 io = 5 events.
-    assert_eq!(events.len(), 5, "events.len()");
+    assert_eq!(events.len(), 7, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -1459,7 +1452,7 @@ fn test_while_loop_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 28 step events:
@@ -1473,7 +1466,7 @@ fn test_while_loop_test_via_ct_print_full() {
         Some(28),
         "steps; counts={counts} (4-iteration loop should yield 28 step events)"
     );
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -1482,7 +1475,7 @@ fn test_while_loop_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 28 steps + 1 io = 29 events.
-    assert_eq!(events.len(), 29, "events.len()");
+    assert_eq!(events.len(), 31, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Step-line order: 4 full iterations + 1 partial -------------
@@ -1854,35 +1847,32 @@ fn script_arith_source_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-programs/script_arith/src/main.sw")
 }
 
-/// Skip-helper for the forc-built fixture.  The recorder is built
-/// without forc as a runtime dependency, but the precompiled `.bin`
-/// shipping with the repo is the contract this test pins against.
-/// If the bytecode is missing (i.e. the developer hasn't run
-/// `forc build` yet), the test emits a `SKIP:` line so the
-/// `verify-cli-convention-no-silent-skip.sh` greppable contract is
-/// preserved.
-fn script_arith_bytecode_or_skip(test_name: &str) -> Option<Vec<u8>> {
+/// Returns the precompiled forc-built bytecode or panics with a clear
+/// diagnostic.  The recorder is built without forc as a runtime
+/// dependency, but the precompiled `.bin` shipping with the repo is
+/// the contract this test pins against.  Per the "no graceful skips"
+/// policy we no longer silently bail when the bytecode is missing —
+/// the developer must run `forc build` (or rebuild the recorder
+/// through reprobuild, which produces the same artifact).
+fn require_script_arith_bytecode(test_name: &str) -> Vec<u8> {
     let p = script_arith_bytecode_path();
-    if !p.exists() {
-        eprintln!(
-            "SKIP: {test_name} requires forc-built bytecode at {} — \
-             run `forc build` in test-programs/script_arith first.",
-            p.display()
-        );
-        return None;
-    }
-    std::fs::read(&p).ok()
+    assert!(
+        p.exists(),
+        "forc-built bytecode required for '{test_name}' at {} — \
+         run `forc build` in test-programs/script_arith or build the recorder \
+         via reprobuild; do not skip the test silently",
+        p.display()
+    );
+    std::fs::read(&p).unwrap_or_else(|e| {
+        panic!("read forc-built bytecode at {}: {}", p.display(), e)
+    })
 }
 
 #[test]
 fn test_script_arith_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_script_arith_test_via_ct_print_full") else {
-        return;
-    };
-    let Some(bytecode) = script_arith_bytecode_or_skip("test_script_arith_test_via_ct_print_full")
-    else {
-        return;
-    };
+    let ct_print = require_ct_print("test_script_arith_test_via_ct_print_full");
+    let bytecode =
+        require_script_arith_bytecode("test_script_arith_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -1947,11 +1937,22 @@ fn test_script_arith_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert!(
-        functions.first() == Some(&"main"),
-        "first function entry must be `main`; got {functions:?}"
+    // The synthetic `<toplevel>` frame (added by the recorder so the
+    // vscode-extension WDIO smoke surfaces a real outer Call) sits in
+    // index 0; the spec-correct entry-point name `main` immediately
+    // follows it.
+    assert_eq!(
+        functions.first(),
+        Some(&"<toplevel>"),
+        "first function entry must be the synthetic `<toplevel>` frame; \
+         got {functions:?}"
     );
-    let synthetic_pool = ["main", "outer", "middle", "inner"];
+    assert!(
+        functions.iter().any(|name| *name == "main"),
+        "`main` must appear in the functions table as the script's \
+         entry-point name; got {functions:?}"
+    );
+    let synthetic_pool = ["<toplevel>", "main", "outer", "middle", "inner"];
     for name in &functions {
         let known = synthetic_pool.contains(name) || name.starts_with("fn_");
         assert!(
@@ -2079,10 +2080,7 @@ const CONTRACT_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_contract_abi_dispatch_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_contract_abi_dispatch_test_via_ct_print_full")
-    else {
-        return;
-    };
+    let ct_print = require_ct_print("test_contract_abi_dispatch_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -2119,7 +2117,7 @@ fn test_contract_abi_dispatch_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     // ----- counts -----------------------------------------------------
     // 9 step events: AbsoluteStep at L1 + DeltaStep at L1..L8 (8
@@ -2127,7 +2125,7 @@ fn test_contract_abi_dispatch_test_via_ct_print_full() {
     // (no real Sway call graph at the bytecode layer).
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -2135,7 +2133,7 @@ fn test_contract_abi_dispatch_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 10, "9 steps + 1 io = 10 events");
+    assert_eq!(events.len(), 12, "9 steps + 1 io = 10 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -2259,12 +2257,12 @@ fn test_struct_decoding_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 9 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L8.
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -2406,7 +2404,7 @@ fn test_panic_receipt_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 4 step events: AbsoluteStep at L1 + DeltaStep at L1, L2, L3.
@@ -2414,7 +2412,7 @@ fn test_panic_receipt_test_via_ct_print_full() {
     // the opcode executes — by the time the VM transitions to the
     // panic state the step callback has already been invoked).
     assert_eq!(counts["steps"].as_u64(), Some(4), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     // 2 io_events:
     //   1. the per-instruction `FuelStorageRead` io_event emitted at
     //      L3 by `emit_storage_opcode_event` (before the SRW executes)
@@ -2427,7 +2425,7 @@ fn test_panic_receipt_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 6, "4 steps + 2 ios = 6 events");
+    assert_eq!(events.len(), 8, "4 steps + 2 ios = 6 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -2708,9 +2706,7 @@ fn predicate_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_predicate_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_predicate_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_predicate_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -2748,14 +2744,14 @@ fn test_predicate_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["predicate"],
+        vec!["<toplevel>", "predicate"],
         "predicate-mode recording must rename the entry-point function \
          from `main` to `predicate`; got {functions:?}"
     );
 
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(5), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -2763,7 +2759,7 @@ fn test_predicate_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 5, "5 steps + 0 ios = 5 events");
+    assert_eq!(events.len(), 7, "5 steps + 0 ios = 5 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -2866,11 +2862,11 @@ fn test_vec_dynamic_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(4),
@@ -2878,7 +2874,7 @@ fn test_vec_dynamic_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 24, "20 steps + 4 ios = 24 events");
+    assert_eq!(events.len(), 26, "20 steps + 4 ios = 24 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -3012,9 +3008,7 @@ const TUPLE_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_tuple_decoding_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_tuple_decoding_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_tuple_decoding_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -3050,11 +3044,11 @@ fn test_tuple_decoding_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -3062,7 +3056,7 @@ fn test_tuple_decoding_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 13, "12 steps + 1 io = 13 events");
+    assert_eq!(events.len(), 15, "12 steps + 1 io = 13 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -3212,7 +3206,7 @@ fn record_variant_and_dump_full(
     program_name: &str,
     bytecode: Vec<u8>,
 ) -> Option<serde_json::Value> {
-    let ct_print = ct_print_or_skip(test_name)?;
+    let ct_print = require_ct_print(test_name);
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
     let source_path = temp_dir.path().join(format!("{program_name}.sw"));
@@ -3396,7 +3390,7 @@ fn test_storage_vec_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(4), "steps; counts={counts}");
@@ -3407,7 +3401,7 @@ fn test_storage_vec_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 6, "4 steps + 2 ios = 6 events");
+    assert_eq!(events.len(), 8, "4 steps + 2 ios = 6 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -3542,9 +3536,7 @@ fn library_test_source_map(main_path: &PathBuf, lib_path: &PathBuf) -> SwaySourc
 
 #[test]
 fn test_library_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_library_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_library_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -3638,7 +3630,7 @@ fn test_library_test_via_ct_print_full() {
     // does NOT change the step count or step paths — it only adds
     // extra `register_call`/`register_return` events.
     assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -3647,7 +3639,7 @@ fn test_library_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 7 steps + 2 call_entry + 2 call_exit + 1 io = 12 events.
-    assert_eq!(events.len(), 12, "events.len()");
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // The expected step-line walk: anchor L1 + L1, L2, L10, L11, L3,
@@ -3748,9 +3740,7 @@ const ARRAY_FIXED_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_array_fixed_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_array_fixed_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_array_fixed_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -3785,12 +3775,12 @@ fn test_array_fixed_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 13 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L12.
     assert_eq!(counts["steps"].as_u64(), Some(13), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -3798,7 +3788,7 @@ fn test_array_fixed_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 14, "13 steps + 1 io = 14 events");
+    assert_eq!(events.len(), 16, "13 steps + 1 io = 14 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -4040,7 +4030,7 @@ fn record_with_abi_and_dump_full(
     bytecode: Vec<u8>,
     abi_json: &str,
 ) -> Option<serde_json::Value> {
-    let ct_print = ct_print_or_skip(test_name)?;
+    let ct_print = require_ct_print(test_name);
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
     let source_path = temp_dir.path().join(format!("{program_name}.sw"));
@@ -4538,7 +4528,7 @@ fn record_match_arm_and_dump_full(
     discriminator: u8,
     payload: &[u8],
 ) -> Option<serde_json::Value> {
-    let ct_print = ct_print_or_skip(test_name)?;
+    let ct_print = require_ct_print(test_name);
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
     let source_path = temp_dir.path().join(format!("{program_name}.sw"));
@@ -4824,12 +4814,12 @@ fn test_bytes_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 15 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L14.
     assert_eq!(counts["steps"].as_u64(), Some(15), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -4837,7 +4827,7 @@ fn test_bytes_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 16, "15 steps + 1 io = 16 events");
+    assert_eq!(events.len(), 18, "15 steps + 1 io = 16 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -5318,12 +5308,12 @@ fn test_log_builtin_test_via_ct_print_full() {
     // straddle the recorder's NESTED_CALL_LINE_GAP_THRESHOLD; the
     // straight-line walk L1..L23 (gap = 1 between consecutive lines)
     // therefore stays in the single `main` cluster.
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 24 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L23.
     assert_eq!(counts["steps"].as_u64(), Some(24), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     // 3 io_events: one Receipt::Log + two Receipt::LogData.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -5332,7 +5322,7 @@ fn test_log_builtin_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 27, "24 steps + 3 ios = 27 events");
+    assert_eq!(events.len(), 29, "24 steps + 3 ios = 27 events");
     assert_step_indices_monotonic(&doc);
 
     let walk = observed_step_lines(&doc);
@@ -5926,12 +5916,12 @@ fn test_b256_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 11 step events: AbsoluteStep at L1 + DeltaStep transitions L1..L10.
     assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -5939,7 +5929,7 @@ fn test_b256_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 12, "11 steps + 1 io = 12 events");
+    assert_eq!(events.len(), 14, "11 steps + 1 io = 12 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -6036,9 +6026,7 @@ fn trait_impl_source_map(source_path: &PathBuf) -> SwaySourceMap {
 
 #[test]
 fn test_trait_impl_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_trait_impl_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_trait_impl_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -6076,7 +6064,7 @@ fn test_trait_impl_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec![
+        vec!["<toplevel>", 
             "main",
             "<Hello as Greet>::greet",
             "<Goodbye as Greet>::greet"
@@ -6091,7 +6079,7 @@ fn test_trait_impl_test_via_ct_print_full() {
     // L20, L21, L22.
     assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
     // 2 synthesised in-program calls, one per trait impl method.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 2 Receipt::Log io_events (one per log() call site).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -6101,7 +6089,7 @@ fn test_trait_impl_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 6 steps + 2 call_entry + 2 call_exit + 2 io = 12 events.
-    assert_eq!(events.len(), 12, "events.len()");
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Each impl method surfaces with the impl-qualified name ----
@@ -6112,7 +6100,7 @@ fn test_trait_impl_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         call_entries,
-        vec!["<Hello as Greet>::greet", "<Goodbye as Greet>::greet"],
+        vec!["<toplevel>", "<Hello as Greet>::greet", "<Goodbye as Greet>::greet"],
         "each trait-impl method must surface as its own register_call \
          with the impl-qualified function name"
     );
@@ -6164,9 +6152,7 @@ fn generic_function_source_map(source_path: &PathBuf) -> SwaySourceMap {
 
 #[test]
 fn test_generic_function_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_generic_function_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_generic_function_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -6201,7 +6187,7 @@ fn test_generic_function_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "add::<u32>", "add::<u64>"],
+        vec!["<toplevel>", "main", "add::<u32>", "add::<u64>"],
         "functions table MUST contain main + the two mangled \
          monomorphisation names (the recorder's call_name_overrides \
          hook drives the synthesised in-program call naming)"
@@ -6211,7 +6197,7 @@ fn test_generic_function_test_via_ct_print_full() {
     // 8 step events: AbsoluteStep at L1 + 7 DeltaSteps for L10..L12,
     // L20..L22, L23.
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -6220,7 +6206,7 @@ fn test_generic_function_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 8 steps + 2 call_entry + 2 call_exit = 12 events.
-    assert_eq!(events.len(), 12, "events.len()");
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     let call_entries: Vec<&str> = events
@@ -6230,7 +6216,7 @@ fn test_generic_function_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         call_entries,
-        vec!["add::<u32>", "add::<u64>"],
+        vec!["<toplevel>", "add::<u32>", "add::<u64>"],
         "each monomorphisation MUST produce its own register_call with \
          the mangled-name encoding"
     );
@@ -6331,9 +6317,7 @@ fn ref_param_source_map(source_path: &PathBuf) -> SwaySourceMap {
 
 #[test]
 fn test_ref_param_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_ref_param_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_ref_param_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -6368,7 +6352,7 @@ fn test_ref_param_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "mutate"],
+        vec!["<toplevel>", "main", "mutate"],
         "functions table MUST contain main + the synthesised callee \
          `mutate` (the recorder's call_name_overrides hook drives the \
          in-program call naming)"
@@ -6378,7 +6362,7 @@ fn test_ref_param_test_via_ct_print_full() {
     // 6 step events: AbsoluteStep at L1 + DeltaSteps L1, L2, L10, L11, L12.
     assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
     // 1 synthesised in-program call (`mutate`).
-    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
     // 2 Receipt::Log io_events (one per log() call).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -6388,7 +6372,7 @@ fn test_ref_param_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 6 steps + 1 call_entry + 1 call_exit + 2 io = 10 events.
-    assert_eq!(events.len(), 10, "events.len()");
+    assert_eq!(events.len(), 12, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     let call_entries: Vec<&str> = events
@@ -6396,7 +6380,7 @@ fn test_ref_param_test_via_ct_print_full() {
         .filter(|e| e["kind"] == "call_entry")
         .filter_map(|e| e["function"].as_str())
         .collect();
-    assert_eq!(call_entries, vec!["mutate"]);
+    assert_eq!(call_entries, vec!["<toplevel>", "mutate"]);
 
     // ----- The recorder MUST track the referenced value across the call
     // Pre-call (L2 inside the caller cluster) the tracked &mut local
@@ -6548,7 +6532,7 @@ fn test_inline_asm_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main"],
+        vec!["<toplevel>", "main"],
         "asm block MUST NOT surface as a separate function — it's an \
          inline expression inside `main`, not a callee"
     );
@@ -6558,7 +6542,7 @@ fn test_inline_asm_test_via_ct_print_full() {
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
     assert_eq!(
         counts["calls"].as_u64(),
-        Some(0),
+        Some(1),
         "asm block MUST NOT trigger any synthesised in-program call; \
          counts={counts}"
     );
@@ -6570,7 +6554,7 @@ fn test_inline_asm_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 8 steps + 1 io = 9 events.
-    assert_eq!(events.len(), 9, "events.len()");
+    assert_eq!(events.len(), 11, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Strict pin: asm-block step events surface with line numbers
@@ -6716,12 +6700,12 @@ fn test_configurable_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main"]);
+    assert_eq!(functions, vec!["<toplevel>", "main"]);
 
     let counts = &doc["counts"];
     // 9 step events: AbsoluteStep at L1 + 8 DeltaSteps for L1..L8.
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(0), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(1),
@@ -6729,7 +6713,7 @@ fn test_configurable_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 10, "9 steps + 1 io = 10 events");
+    assert_eq!(events.len(), 12, "9 steps + 1 io = 10 events");
     assert_step_indices_monotonic(&doc);
 
     assert_eq!(
@@ -6864,9 +6848,7 @@ fn cross_contract_call_source_map(source_path: &PathBuf) -> SwaySourceMap {
 
 #[test]
 fn test_cross_contract_call_test_via_ct_print_full() {
-    let Some(ct_print) = ct_print_or_skip("test_cross_contract_call_test_via_ct_print_full") else {
-        return;
-    };
+    let ct_print = require_ct_print("test_cross_contract_call_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -6907,7 +6889,7 @@ fn test_cross_contract_call_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", expected_callee],
+        vec!["<toplevel>", "main", expected_callee],
         "functions table MUST contain main + the synthesised callee \
          name encoding both the target contract addr and the method \
          selector"
@@ -6917,7 +6899,7 @@ fn test_cross_contract_call_test_via_ct_print_full() {
     // 6 step events: AbsoluteStep at L1 + 5 DeltaSteps for L1, L2, L10,
     // L11, L12.
     assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(1), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(2),
@@ -6926,7 +6908,7 @@ fn test_cross_contract_call_test_via_ct_print_full() {
 
     let events = doc["events"].as_array().expect("events array");
     // 6 steps + 1 call_entry + 1 call_exit + 2 io = 10 events.
-    assert_eq!(events.len(), 10, "events.len()");
+    assert_eq!(events.len(), 12, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     let call_entries: Vec<&str> = events
@@ -6936,7 +6918,7 @@ fn test_cross_contract_call_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         call_entries,
-        vec![expected_callee],
+        vec!["<toplevel>", "contract:0xabcdef0123456789...method=0xdeadbeef"],
         "the cross-contract call MUST surface as a single register_call \
          whose function name encodes the target contract addr + method \
          selector"
