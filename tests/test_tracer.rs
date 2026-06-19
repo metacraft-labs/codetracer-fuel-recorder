@@ -968,7 +968,10 @@ fn test_nested_calls_test_via_ct_print_full() {
     // registered by `FuelRecorder::record`.  See the parallel
     // `test_nested_calls_test_emits_call_chain` regression pin and
     // `recorder.rs::synthetic_call_name` for the naming convention.
-    assert_eq!(functions, vec!["<toplevel>", "main", "outer", "middle", "inner"]);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "outer", "middle", "inner"]
+    );
 
     let counts = &doc["counts"];
     // 9 step events: initial AbsoluteStep at line 10 + 8 transitions
@@ -1863,16 +1866,14 @@ fn require_script_arith_bytecode(test_name: &str) -> Vec<u8> {
          via reprobuild; do not skip the test silently",
         p.display()
     );
-    std::fs::read(&p).unwrap_or_else(|e| {
-        panic!("read forc-built bytecode at {}: {}", p.display(), e)
-    })
+    std::fs::read(&p)
+        .unwrap_or_else(|e| panic!("read forc-built bytecode at {}: {}", p.display(), e))
 }
 
 #[test]
 fn test_script_arith_test_via_ct_print_full() {
     let ct_print = require_ct_print("test_script_arith_test_via_ct_print_full");
-    let bytecode =
-        require_script_arith_bytecode("test_script_arith_test_via_ct_print_full");
+    let bytecode = require_script_arith_bytecode("test_script_arith_test_via_ct_print_full");
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -6064,7 +6065,8 @@ fn test_trait_impl_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["<toplevel>", 
+        vec![
+            "<toplevel>",
             "main",
             "<Hello as Greet>::greet",
             "<Goodbye as Greet>::greet"
@@ -6100,7 +6102,11 @@ fn test_trait_impl_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         call_entries,
-        vec!["<toplevel>", "<Hello as Greet>::greet", "<Goodbye as Greet>::greet"],
+        vec![
+            "<toplevel>",
+            "<Hello as Greet>::greet",
+            "<Goodbye as Greet>::greet"
+        ],
         "each trait-impl method must surface as its own register_call \
          with the impl-qualified function name"
     );
@@ -6918,7 +6924,10 @@ fn test_cross_contract_call_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         call_entries,
-        vec!["<toplevel>", "contract:0xabcdef0123456789...method=0xdeadbeef"],
+        vec![
+            "<toplevel>",
+            "contract:0xabcdef0123456789...method=0xdeadbeef"
+        ],
         "the cross-contract call MUST surface as a single register_call \
          whose function name encodes the target contract addr + method \
          selector"
