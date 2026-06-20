@@ -576,9 +576,13 @@ fn test_log_instruction() {
         .run_with_callback(|step: &StepState| {
             for receipt in &step.receipts {
                 if let fuel_tx::Receipt::Log { ra, rb, rc, rd, .. } = receipt
-                    && *ra == 111 && *rb == 222 && *rc == 333 && *rd == 444 {
-                        saw_log_receipt = true;
-                    }
+                    && *ra == 111
+                    && *rb == 222
+                    && *rc == 333
+                    && *rd == 444
+                {
+                    saw_log_receipt = true;
+                }
             }
         })
         .unwrap();
@@ -623,9 +627,10 @@ fn test_logd_instruction() {
         .run_with_callback(|step: &StepState| {
             for receipt in &step.receipts {
                 if let fuel_tx::Receipt::LogData { data, .. } = receipt
-                    && data.is_some() {
-                        saw_logd = true;
-                    }
+                    && data.is_some()
+                {
+                    saw_logd = true;
+                }
             }
         })
         .unwrap();
