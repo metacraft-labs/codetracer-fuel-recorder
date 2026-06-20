@@ -78,7 +78,6 @@ pub enum ProgramKind {
     Predicate,
 }
 
-
 /// The main recorder that processes FuelVM execution events into CodeTracer
 /// trace format.
 ///
@@ -211,12 +210,8 @@ impl FuelRecorder {
         // consumers assume the frame exists). Closed by the matching
         // `register_return` at the end of `record_trace`.
         TraceWriter::start(&mut *writer, source_path, Line(1));
-        let toplevel_fn = TraceWriter::ensure_function_id(
-            &mut *writer,
-            "<toplevel>",
-            source_path,
-            Line(1),
-        );
+        let toplevel_fn =
+            TraceWriter::ensure_function_id(&mut *writer, "<toplevel>", source_path, Line(1));
         TraceWriter::register_call(&mut *writer, toplevel_fn, vec![]);
 
         // Register the "u64" type (after start, so that "None" gets TypeId(0))
@@ -505,34 +500,35 @@ impl FuelRecorder {
         let mut emit_b256_decoder = false;
         let mut emit_configurable_decoder = false;
         if let Some(abi) = &self.abi
-            && let Some(out_type) = abi.function_output_type("main") {
-                let trimmed = out_type.trim();
-                if trimmed == "(u64, b256, bool)" {
-                    emit_tuple_decoder = true;
-                } else if trimmed == "enum Outcome" {
-                    emit_variant_decoder = true;
-                } else if trimmed == "enum Option<u64>" {
-                    emit_option_decoder = true;
-                } else if trimmed == "enum Result<u64, str>" {
-                    emit_result_decoder = true;
-                } else if trimmed == "[u64; 4]" {
-                    emit_array_fixed_decoder = true;
-                } else if trimmed == "(u8, u16, u32, u64)" {
-                    emit_integer_widths_decoder = true;
-                } else if trimmed == "enum Match" {
-                    emit_match_decoder = true;
-                } else if trimmed == "Bytes" {
-                    emit_bytes_decoder = true;
-                } else if trimmed == "enum Identity" {
-                    emit_identity_decoder = true;
-                } else if trimmed == "Address" || trimmed == "ContractId" || trimmed == "AssetId" {
-                    emit_address_decoder = true;
-                } else if trimmed == "b256" {
-                    emit_b256_decoder = true;
-                } else if trimmed == "configurable_payload" {
-                    emit_configurable_decoder = true;
-                }
+            && let Some(out_type) = abi.function_output_type("main")
+        {
+            let trimmed = out_type.trim();
+            if trimmed == "(u64, b256, bool)" {
+                emit_tuple_decoder = true;
+            } else if trimmed == "enum Outcome" {
+                emit_variant_decoder = true;
+            } else if trimmed == "enum Option<u64>" {
+                emit_option_decoder = true;
+            } else if trimmed == "enum Result<u64, str>" {
+                emit_result_decoder = true;
+            } else if trimmed == "[u64; 4]" {
+                emit_array_fixed_decoder = true;
+            } else if trimmed == "(u8, u16, u32, u64)" {
+                emit_integer_widths_decoder = true;
+            } else if trimmed == "enum Match" {
+                emit_match_decoder = true;
+            } else if trimmed == "Bytes" {
+                emit_bytes_decoder = true;
+            } else if trimmed == "enum Identity" {
+                emit_identity_decoder = true;
+            } else if trimmed == "Address" || trimmed == "ContractId" || trimmed == "AssetId" {
+                emit_address_decoder = true;
+            } else if trimmed == "b256" {
+                emit_b256_decoder = true;
+            } else if trimmed == "configurable_payload" {
+                emit_configurable_decoder = true;
             }
+        }
 
         // Create interpreter and run with single-stepping
         let interp = FuelInterpreter::new(bytecode)?;
@@ -623,9 +619,11 @@ impl FuelRecorder {
                 if let Receipt::LogData {
                     data: Some(bytes), ..
                 } = receipt
-                    && !bytes.is_empty() && step_logd_payload.is_none() {
-                        step_logd_payload = Some(bytes.clone());
-                    }
+                    && !bytes.is_empty()
+                    && step_logd_payload.is_none()
+                {
+                    step_logd_payload = Some(bytes.clone());
+                }
                 emit_receipt_special_event(&mut *writer, receipt);
             }
             prev_receipt_count = step.receipts.len();
