@@ -83,9 +83,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          forc_out="$(nix build --accept-flake-config --no-link --print-out-paths github:metacraft-labs/nix-blockchain-development#forc)"
-          echo "${forc_out}/bin" >> "$GITHUB_PATH"
-          "${forc_out}/bin/forc" --version
+          tools="$(nix build --no-link --print-out-paths nixpkgs#curl nixpkgs#gnutar nixpkgs#gzip nixpkgs#coreutils)"
+          while IFS= read -r out; do
+            echo "${out}/bin" >> "$GITHUB_PATH"
+            export PATH="${out}/bin:${PATH}"
+          done <<< "$tools"
+
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)
+              url="https://github.com/FuelLabs/sway/releases/download/v0.70.3/forc-binaries-linux_amd64.tar.gz"
+              sha256="572a61acae22887e28b1f3222b98951ae4cf253cab1d6c5668f71aee239f07cc"
+              ;;
+            Darwin-arm64|Darwin-aarch64)
+              url="https://github.com/FuelLabs/sway/releases/download/v0.70.3/forc-binaries-darwin_arm64.tar.gz"
+              sha256="14d24cd9a42ff2499464592e13e4806aec3e3669768013e24cc98e2be0b573c2"
+              ;;
+            Darwin-x86_64)
+              url="https://github.com/FuelLabs/sway/releases/download/v0.70.3/forc-binaries-darwin_amd64.tar.gz"
+              sha256="801ff4749eb8681229c8d4ce74142a8f206b9b0e79c626a3936beaec19f1646e"
+              ;;
+            *)
+              echo "unsupported forc CI platform: $(uname -s)-$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          tool_dir="${RUNNER_TEMP}/forc"
+          mkdir -p "$tool_dir"
+          archive="${tool_dir}/forc-binaries.tar.gz"
+          curl -L --fail --retry 3 -o "$archive" "$url"
+          printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$tool_dir"
+          echo "${tool_dir}/forc-binaries" >> "$GITHUB_PATH"
+          "${tool_dir}/forc-binaries/forc" --version
 
       - name: Prepare macOS linker paths
         if: matrix.os == 'macos'
@@ -108,8 +138,8 @@ jobs:
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
         # reprobuild engine. Fuel's Sway fixtures use `forc`, which is
-        # provided by the prepared dev shell rather than the reprobuild
-        # Nix package catalog.
+        # provided above from the same pinned upstream binary catalog
+        # that reprobuild uses outside Nix provisioning.
         run: dev-exec repro build --tool-provisioning=path --no-runquota
 
       - name: repro test
