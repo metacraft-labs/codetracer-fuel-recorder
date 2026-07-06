@@ -114,10 +114,19 @@ package codetracer_fuel_recorder:
     let ctPrintBuild = shell(
       command =
         "set -euo pipefail; " &
+        "recorder_root=\"$PWD\"; " &
         "cd ../codetracer-trace-format-nim; " &
-        "nimble install -y stew results; " &
-        "nim c -d:release --mm:arc -p:src -o:ct-print " &
-          "src/codetracer_ct_print.nim; " &
+        "if [ -d \"$recorder_root/.reprobuild-src/libs/results/src\" ] && " &
+            "[ -d \"$recorder_root/.reprobuild-src/libs/nim-stew/src\" ]; then " &
+          "nim c -d:release --mm:arc -p:src " &
+            "-p:\"$recorder_root/.reprobuild-src/libs/results/src\" " &
+            "-p:\"$recorder_root/.reprobuild-src/libs/nim-stew/src\" " &
+            "-o:ct-print src/codetracer_ct_print.nim; " &
+        "else " &
+          "nimble install -y stew results; " &
+          "nim c -d:release --mm:arc -p:src -o:ct-print " &
+            "src/codetracer_ct_print.nim; " &
+        "fi; " &
         "test -f ct-print" & binarySuffix,
       actionId = "codetracer-fuel-recorder.ct-print-build",
       cacheable = false)
