@@ -682,27 +682,6 @@ impl FuelRecorder {
                 prev_line = Some(line);
             }
 
-            if is_function_transition {
-                if nested_call_depth > 0 {
-                    TraceWriter::register_return(&mut *writer, NONE_VALUE);
-                    nested_call_depth -= 1;
-                }
-                let callee_name = if nested_calls_seen < self.call_name_overrides.len() {
-                    self.call_name_overrides[nested_calls_seen].clone()
-                } else {
-                    synthetic_call_name(nested_calls_seen)
-                };
-                nested_calls_seen += 1;
-                let fn_id = TraceWriter::ensure_function_id(
-                    &mut *writer,
-                    &callee_name,
-                    &step_path,
-                    Line(line as i64),
-                );
-                TraceWriter::register_call(&mut *writer, fn_id, vec![]);
-                nested_call_depth += 1;
-            }
-
             // Process step through variable tracker
             let tracked_vars = tracker.process_step(step);
 
@@ -1339,6 +1318,32 @@ impl FuelRecorder {
                         value,
                     );
                 }
+            }
+
+            // Emit synthetic in-program call/return boundaries only
+            // after the current step's variables have been attached.
+            // register_return/register_call flush the pending step; if
+            // they run before the variable loop, transition steps lose
+            // their register and ABI-decoded variables.
+            if is_function_transition {
+                if nested_call_depth > 0 {
+                    TraceWriter::register_return(&mut *writer, NONE_VALUE);
+                    nested_call_depth -= 1;
+                }
+                let callee_name = if nested_calls_seen < self.call_name_overrides.len() {
+                    self.call_name_overrides[nested_calls_seen].clone()
+                } else {
+                    synthetic_call_name(nested_calls_seen)
+                };
+                nested_calls_seen += 1;
+                let fn_id = TraceWriter::ensure_function_id(
+                    &mut *writer,
+                    &callee_name,
+                    &step_path,
+                    Line(line as i64),
+                );
+                TraceWriter::register_call(&mut *writer, fn_id, vec![]);
+                nested_call_depth += 1;
             }
         })?;
 
