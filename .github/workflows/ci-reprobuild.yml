@@ -78,6 +78,15 @@ jobs:
           echo "$xz_bin" >> "$GITHUB_PATH"
           "$xz_bin/xz" --version
 
+      - name: Add forc for Fuel fixtures
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          forc_out="$(nix build --accept-flake-config --no-link --print-out-paths github:metacraft-labs/nix-blockchain-development#forc)"
+          echo "${forc_out}/bin" >> "$GITHUB_PATH"
+          "${forc_out}/bin/forc" --version
+
       - name: Prepare macOS linker paths
         if: matrix.os == 'macos'
         shell: bash
