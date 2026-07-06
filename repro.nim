@@ -24,6 +24,7 @@
 ## Fuel: tests compile Sway via the pinned forc 0.70.3.
 
 import repro_project_dsl
+import repro_dsl_stdlib/packages/sh
 
 package codetracer_fuel_recorder:
   uses:
@@ -46,6 +47,9 @@ package codetracer_fuel_recorder:
     # libzstd headers + library, needed when linking the Nim FFI
     # static library into the cargo build.
     "zstd"
+
+    # POSIX shell — builds the sibling ct-print runtime test helper.
+    "sh"
 
     # pkg-config + OpenSSL — openssl-sys consults pkg-config to find
     # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
@@ -107,6 +111,17 @@ package codetracer_fuel_recorder:
       extraEnv = cargoCompilerEnv)
     discard collect("default", @[recorderBuild])
 
+    let ctPrintBuild = shell(
+      command =
+        "set -euo pipefail; " &
+        "cd ../codetracer-trace-format-nim; " &
+        "nimble install -y stew results; " &
+        "nim c -d:release --mm:arc -p:src -o:ct-print " &
+          "src/codetracer_ct_print.nim; " &
+        "test -f ct-print" & binarySuffix,
+      actionId = "codetracer-fuel-recorder.ct-print-build",
+      cacheable = false)
+
     # ---- Test-binary build + run edges (the `test` collection) -------
     #
     # Two-stage shape per Repo-Requirements.md §2.8: `cargo.test(noRun =
@@ -149,7 +164,7 @@ package codetracer_fuel_recorder:
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-fuel-recorder.cargo-test-run",
-      after = @[testsBuild.action],
+      after = @[testsBuild.action, ctPrintBuild],
       extraInputs = @[
         "Cargo.toml", "Cargo.lock",
         "src", "tests",
