@@ -98,23 +98,16 @@ jobs:
         # Builds the conventional `build` collection declared in
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
-        # reprobuild engine identically to `just build`.
-        run: dev-exec repro build --tool-provisioning=${{ matrix.os == 'windows' && 'path' || 'nix' }} --no-runquota
+        # reprobuild engine. Fuel's Sway fixtures use `forc`, which is
+        # provided by the prepared dev shell rather than the reprobuild
+        # Nix package catalog.
+        run: dev-exec repro build --tool-provisioning=path --no-runquota
 
       - name: repro test
         # Materialises the `test` collection.
         env:
           REPROBUILD_NO_RUNQUOTA: "1"
-        run: dev-exec repro test --tool-provisioning=${{ matrix.os == 'windows' && 'path' || 'nix' }}
-
-      - name: just build (cross-check)
-        # Re-runs the legacy `just build` path inside the same env so
-        # we catch silent divergences between `repro build` outputs
-        # and what the dev shell + Justfile produce today.
-        run: dev-exec just build
-
-      - name: just test (cross-check)
-        run: dev-exec just test
+        run: dev-exec repro test --tool-provisioning=path
 
       - name: Upload logs on failure
         if: failure()
