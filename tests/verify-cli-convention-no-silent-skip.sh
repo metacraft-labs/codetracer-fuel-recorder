@@ -29,7 +29,30 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # script stays focused on verification results.
 ( cd "${REPO_ROOT}" && cargo build --locked --quiet )
 
-BIN="${REPO_ROOT}/target/debug/codetracer-fuel-recorder"
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  CARGO_TARGET_DIR_EFFECTIVE="${CARGO_TARGET_DIR}"
+else
+  PYTHON_BIN=""
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      PYTHON_BIN="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${PYTHON_BIN}" ]]; then
+    echo "ERROR: python3 or python is required to read cargo metadata" >&2
+    exit 1
+  fi
+
+  CARGO_TARGET_DIR_EFFECTIVE="$(
+    cd "${REPO_ROOT}"
+    cargo metadata --locked --no-deps --format-version 1 |
+      "${PYTHON_BIN}" -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+  )"
+fi
+
+BIN="${CARGO_TARGET_DIR_EFFECTIVE}/debug/codetracer-fuel-recorder"
 if [[ ! -x "${BIN}" ]]; then
   echo "ERROR: recorder binary not found at ${BIN}" >&2
   exit 1
