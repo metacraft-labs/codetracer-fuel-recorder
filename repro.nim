@@ -96,9 +96,7 @@ package codetracer_fuel_recorder:
     # POSIX shell — builds the sibling ct-print runtime test helper.
     "sh"
 
-    # pkg-config + OpenSSL — openssl-sys consults pkg-config to find
-    # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
-    # feature instead so neither is on the windows toolchain floor.
+    # C compiler used by cargo build scripts and Nim-generated C code.
     when defined(linux):
       # Nim staticlib builds invoked from cargo expect a GNU archiver on
       # Linux. Use gcc so Nim selects ``ar`` instead of ``llvm-ar``.
@@ -108,8 +106,8 @@ package codetracer_fuel_recorder:
       # below and make clang part of the macOS dev environment.
       "clang"
     when not defined(windows):
+      # The ct-print helper build has pkg-config fallbacks for libzstd.
       "pkg-config"
-      "openssl"
 
     # Language-specific compiler / runtime tools. ``forc`` (the Sway
     # compiler) is Linux/macOS-only — FuelLabs/sway publishes no

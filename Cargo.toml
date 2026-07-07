@@ -32,8 +32,9 @@ fuel-tx = { version = "0.62", features = ["test-helpers"] }
 fuel-asm = "0.62"
 fuel-types = "0.62"
 
-# HTTP client (for GraphQL replay)
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+# HTTP client (for GraphQL replay). Use rustls so reprobuild CI does not
+# depend on a host OpenSSL pkg-config layout.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
