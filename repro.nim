@@ -71,13 +71,6 @@ proc findProviderZstdIncludeDir(libDir: string): string =
       if fileExists(dir / "zstd.h"):
         return dir
 
-package forc:
-  provisioning:
-    nixPackage "github:metacraft-labs/nix-blockchain-development#forc",
-      executablePath = "bin/forc",
-      packageId = "forc@0.70.3",
-      lockIdentity = "github:metacraft-labs/nix-blockchain-development#forc"
-
 package codetracer_fuel_recorder:
   uses:
     # Rust toolchain — declared by version so the tarball-direct
@@ -367,3 +360,12 @@ package codetracer_fuel_recorder:
       extraEnv = cargoCompilerEnv)
 
     discard collect("test", @[testsRun.action])
+
+# Tool-only package metadata stays after the project package so the
+# merged interface root remains codetracer_fuel_recorder.
+package forc:
+  provisioning:
+    nixPackage "github:metacraft-labs/nix-blockchain-development#forc",
+      executablePath = "bin/forc",
+      packageId = "forc@0.70.3",
+      lockIdentity = "github:metacraft-labs/nix-blockchain-development#forc"
