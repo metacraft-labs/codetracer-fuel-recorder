@@ -91,8 +91,10 @@ jobs:
 
           case "$(uname -s)-$(uname -m)" in
             Linux-x86_64)
-              url="https://github.com/FuelLabs/sway/releases/download/v0.70.3/forc-binaries-linux_amd64.tar.gz"
-              sha256="572a61acae22887e28b1f3222b98951ae4cf253cab1d6c5668f71aee239f07cc"
+              forc_out="$(nix build --no-link --print-out-paths github:metacraft-labs/nix-blockchain-development#forc)"
+              echo "${forc_out}/bin" >> "$GITHUB_PATH"
+              "${forc_out}/bin/forc" --version
+              exit 0
               ;;
             Darwin-arm64|Darwin-aarch64)
               url="https://github.com/FuelLabs/sway/releases/download/v0.70.3/forc-binaries-darwin_arm64.tar.gz"
@@ -138,15 +140,15 @@ jobs:
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
         # reprobuild engine. Fuel's Sway fixtures use `forc`, which is
-        # provided above from the same pinned upstream binary catalog
-        # that reprobuild uses outside Nix provisioning.
-        run: dev-exec repro build --tool-provisioning=path --no-runquota
+        # provided above and declared in `repro.nim` for Nix-capable
+        # hosts.
+        run: dev-exec repro build --tool-provisioning=${{ matrix.os == 'windows' && 'path' || 'nix' }} --no-runquota
 
       - name: repro test
         # Materialises the `test` collection.
         env:
           REPROBUILD_NO_RUNQUOTA: "1"
-        run: dev-exec repro test --tool-provisioning=path
+        run: dev-exec repro test --tool-provisioning=${{ matrix.os == 'windows' && 'path' || 'nix' }}
 
       - name: Upload logs on failure
         if: failure()
