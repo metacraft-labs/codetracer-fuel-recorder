@@ -53,6 +53,11 @@ package codetracer_fuel_recorder:
       "pkg-config"
       "openssl"
 
+    # POSIX shell — drives the CLI-convention verification edge below,
+    # the same ``bash tests/verify-cli-convention-no-silent-skip.sh``
+    # step ``just test`` runs after ``cargo test``.
+    "sh"
+
     # Language-specific compiler / runtime tools. ``forc`` (the Sway
     # compiler) is Linux/macOS-only — FuelLabs/sway publishes no
     # Windows artefact and the from-source build fails on Windows (see
@@ -141,4 +146,26 @@ package codetracer_fuel_recorder:
         "target/debug/deps"
       ])
 
-    discard collect("test", @[testsRun.action])
+    # ---- CLI-convention verification edge -----------------------------
+    #
+    # ``just test`` runs ``bash
+    # tests/verify-cli-convention-no-silent-skip.sh`` after ``cargo
+    # test``. The script asserts the recorder's ``--help`` / ``--version``
+    # surface complies with ``Recorder-CLI-Conventions.md``. It is not a
+    # cargo target, so it is modelled as its own ``sh.shell`` execute
+    # edge rather than dropped — reproducing the repo's full ``just test``
+    # set. The script builds the debug binary and inspects its ``--help``
+    # text, so it is re-run every ``repro test`` pass (matching ``just
+    # test``); ``after`` the cargo test-build edge guarantees the binary
+    # exists before the script runs.
+    let cliVerify = shell(
+      command = "bash tests/verify-cli-convention-no-silent-skip.sh",
+      actionId = "codetracer-fuel-recorder.verify-cli-convention",
+      after = @[testsBuild.action],
+      extraInputs = @[
+        "tests/verify-cli-convention-no-silent-skip.sh",
+        "Cargo.toml", "Cargo.lock", "src"
+      ],
+      cacheable = false)
+
+    discard collect("test", @[testsRun.action, cliVerify])
