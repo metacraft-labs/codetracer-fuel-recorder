@@ -140,15 +140,15 @@ jobs:
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
         # reprobuild engine. Fuel's Sway fixtures use `forc`, which is
-        # provided above and declared in `repro.nim` for Nix-capable
-        # hosts.
-        run: dev-exec repro build --tool-provisioning=${{ matrix.os == 'windows' && 'path' || 'nix' }} --no-runquota
+        # provided above and declared in `repro.nim` for Linux Nix
+        # provisioning.
+        run: dev-exec repro build --tool-provisioning=${{ matrix.os == 'linux' && 'nix' || 'path' }} --no-runquota
 
       - name: repro test
         # Materialises the `test` collection.
         env:
           REPROBUILD_NO_RUNQUOTA: "1"
-        run: dev-exec repro test --tool-provisioning=${{ matrix.os == 'windows' && 'path' || 'nix' }}
+        run: dev-exec repro test --tool-provisioning=${{ matrix.os == 'linux' && 'nix' || 'path' }}
 
       - name: Upload logs on failure
         if: failure()
