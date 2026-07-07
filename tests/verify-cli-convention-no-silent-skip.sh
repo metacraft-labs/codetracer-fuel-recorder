@@ -31,6 +31,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
   CARGO_TARGET_DIR_EFFECTIVE="${CARGO_TARGET_DIR}"
+elif [[ -x "${REPO_ROOT}/target/debug/codetracer-fuel-recorder" ]] ||
+     [[ -x "${REPO_ROOT}/target/debug/codetracer-fuel-recorder.exe" ]]; then
+  CARGO_TARGET_DIR_EFFECTIVE="${REPO_ROOT}/target"
 else
   PYTHON_BIN=""
   for candidate in python3 python; do
@@ -53,6 +56,9 @@ else
 fi
 
 BIN="${CARGO_TARGET_DIR_EFFECTIVE}/debug/codetracer-fuel-recorder"
+if [[ ! -x "${BIN}" && -x "${BIN}.exe" ]]; then
+  BIN="${BIN}.exe"
+fi
 if [[ ! -x "${BIN}" ]]; then
   echo "ERROR: recorder binary not found at ${BIN}" >&2
   exit 1
