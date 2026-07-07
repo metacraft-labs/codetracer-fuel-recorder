@@ -677,30 +677,33 @@ impl FuelRecorder {
             // *previous* line into the *previous* call frame and then
             // captures the boundary at exactly the right step index
             // for the soon-to-be-emitted call/return.
+            //
+            // The synthesised call/return for a `is_function_transition`
+            // step are emitted LATER — after this step's register-snapshot
+            // variables have been registered (see the transition block at
+            // the end of this closure).  This ordering is load-bearing:
+            // `register_call` / `register_return` each call the FFI's
+            // `flushPendingStep`, which flushes the *current* pending step
+            // together with whatever values sit in `pendingValues`.  If we
+            // emitted the call/return here (before the per-step variable
+            // loop below), the FFI would flush THIS step with an EMPTY
+            // value set, and the register snapshot registered afterwards
+            // would strand as orphan `pendingValues` and be carried
+            // forward onto the NEXT step — the "value attributed one step
+            // late at a function-transition boundary" bug (the transition
+            // step surfaces with `vars = {}` and its snapshot — e.g. the
+            // post-ADD result of a `var = call()` binding — leaks onto the
+            // following step).  Registering the variables first, then the
+            // call/return, lets `flushPendingStep` attach the snapshot to
+            // THIS step while still capturing `entryStep` / `exitStep`
+            // against the post-flush `stepCount` (the boundary index is
+            // unchanged because the flush still happens before the writer
+            // records the call/return).  Mirrors the canonical move-recorder
+            // ordering (`register_return` / `register_call` follow the
+            // step's variables, not precede them).
             if prev_line != Some(line) {
                 TraceWriter::register_step(&mut *writer, &step_path, Line(line as i64));
                 prev_line = Some(line);
-            }
-
-            if is_function_transition {
-                if nested_call_depth > 0 {
-                    TraceWriter::register_return(&mut *writer, NONE_VALUE);
-                    nested_call_depth -= 1;
-                }
-                let callee_name = if nested_calls_seen < self.call_name_overrides.len() {
-                    self.call_name_overrides[nested_calls_seen].clone()
-                } else {
-                    synthetic_call_name(nested_calls_seen)
-                };
-                nested_calls_seen += 1;
-                let fn_id = TraceWriter::ensure_function_id(
-                    &mut *writer,
-                    &callee_name,
-                    &step_path,
-                    Line(line as i64),
-                );
-                TraceWriter::register_call(&mut *writer, fn_id, vec![]);
-                nested_call_depth += 1;
             }
 
             // Process step through variable tracker
@@ -1339,6 +1342,38 @@ impl FuelRecorder {
                         value,
                     );
                 }
+            }
+
+            // Synthesised in-program call/return for a function-transition
+            // step.  Emitted HERE — after this step's register-snapshot
+            // variables have been staged into the FFI's `pendingValues` —
+            // so the `flushPendingStep` triggered by `register_return` /
+            // `register_call` attaches the snapshot to THIS (the
+            // transition) step instead of stranding it as orphan values
+            // that leak onto the next step.  See the extended comment at
+            // the `register_step` call above for the full rationale.  The
+            // boundary `entryStep` / `exitStep` are still captured against
+            // the post-flush `stepCount`, so the call-frame indices are
+            // unchanged relative to registering the step first.
+            if is_function_transition {
+                if nested_call_depth > 0 {
+                    TraceWriter::register_return(&mut *writer, NONE_VALUE);
+                    nested_call_depth -= 1;
+                }
+                let callee_name = if nested_calls_seen < self.call_name_overrides.len() {
+                    self.call_name_overrides[nested_calls_seen].clone()
+                } else {
+                    synthetic_call_name(nested_calls_seen)
+                };
+                nested_calls_seen += 1;
+                let fn_id = TraceWriter::ensure_function_id(
+                    &mut *writer,
+                    &callee_name,
+                    &step_path,
+                    Line(line as i64),
+                );
+                TraceWriter::register_call(&mut *writer, fn_id, vec![]);
+                nested_call_depth += 1;
             }
         })?;
 
