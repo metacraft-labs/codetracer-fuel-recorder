@@ -12,7 +12,11 @@ on:
 
 jobs:
   build:
-    runs-on: [self-hosted, nixos]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [incus, tart-linux-arm, macos-tart]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
