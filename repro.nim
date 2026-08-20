@@ -68,6 +68,11 @@ package codetracer_fuel_recorder:
     # gated; on Windows ``repro build test`` skips those cases cleanly.
     when not defined(windows):
       "forc"
+    # `choco pack` / `choco push` in .github/workflows/publish-chocolatey.yml.
+    # Windows-guarded because Chocolatey is a Windows package manager with no
+    # POSIX build, so an unguarded entry would fail to resolve on Linux/macOS.
+    when defined(windows):
+      "chocolatey"
 
   executable codetracerFuelRecorder:
     name: "codetracer-fuel-recorder"
