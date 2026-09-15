@@ -44,7 +44,7 @@ class CodetracerFuelRecorder < Formula
   # Source-build fallback. Each blockchain recorder uses Cargo;
   # depend on the Rust toolchain for the head path.
   head do
-    url "https://github.com/metacraft-labs/codetracer-fuel-recorder.git", branch: "main"
+    url "https://github.com/metacraft-labs/codetracer-fuel-recorder.git", branch: "dev"
     depends_on "rust" => :build
   end
 
