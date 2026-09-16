@@ -203,18 +203,14 @@ impl FuelRecorder {
 
         // Start the trace.
         //
-        // `TraceWriter::start` only emits a Step at line 1 — it does
-        // NOT register a `<toplevel>` function or open a Call frame.
-        // Emit them explicitly so the recorded event stream contains
-        // a `<toplevel>` Call (WDIO smoke test and downstream
-        // consumers assume the frame exists). Closed by the matching
-        // `register_return` at the end of `record_trace`.
+        // `TraceWriter::start` registers the `<toplevel>` function, opens its
+        // call frame, and emits the entry step — all three, per
+        // `trace-events.md` §"Recorder Integration — Starting a Recording".
+        // The frame is closed by the matching `register_return` at the end of
+        // `record_trace`.
         TraceWriter::start(&mut *writer, source_path, Line(1));
-        let toplevel_fn =
-            TraceWriter::ensure_function_id(&mut *writer, "<toplevel>", source_path, Line(1));
-        TraceWriter::register_call(&mut *writer, toplevel_fn, vec![]);
 
-        // Register the "u64" type (after start, so that "None" gets TypeId(0))
+        // Register the "u64" type.
         let u64_type_id = TraceWriter::ensure_type_id(&mut *writer, TypeKind::Int, "u64");
         // Register a Sequence type for LOGD payload byte buffers.  The
         // `LOGD` opcode is the only structured-value surface raw
