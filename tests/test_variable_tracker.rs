@@ -272,19 +272,27 @@ fn test_full_pipeline_with_tracker() {
     assert!(!ct_files.is_empty(), "expected .ct file");
     let ct_content = std::fs::read(&ct_files[0]).unwrap();
     assert!(ct_content.len() >= 5 && ct_content[..5] == [0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
-    // Event checks deferred until CTFS reader available.
-    let events: Vec<serde_json::Value> = vec![];
-    if events.is_empty() {
-        return;
-    }
+    let events = codetracer_trace_reader::ctfs_reader::read_trace_from_ctfs(&ct_files[0])
+        .unwrap_or_else(|error| {
+            panic!(
+                "read back {} — the recorder wrote it, so this reader must be able to \
+                 decode it: {error}",
+                ct_files[0].display()
+            )
+        });
+    assert!(
+        !events.is_empty(),
+        "the recorder produced {} but it decoded to no events at all",
+        ct_files[0].display()
+    );
 
     // Collect all variable names from the trace
     let var_names: Vec<String> = events
         .iter()
-        .filter_map(|e| {
-            e.get("VariableName")
-                .and_then(|n| n.as_str())
-                .map(|s| s.to_string())
+        .filter_map(|e| match e {
+            codetracer_trace_types::TraceLowLevelEvent::VariableName(n)
+            | codetracer_trace_types::TraceLowLevelEvent::Variable(n) => Some(n.clone()),
+            _ => None,
         })
         .collect();
 
@@ -313,11 +321,12 @@ fn test_full_pipeline_with_tracker() {
     // Verify that values are present
     let int_values: Vec<i64> = events
         .iter()
-        .filter_map(|e| {
-            e.get("Value")
-                .and_then(|v| v.get("value"))
-                .and_then(|v| v.get("i"))
-                .and_then(|v| v.as_i64())
+        .filter_map(|e| match e {
+            codetracer_trace_types::TraceLowLevelEvent::Value(full) => match full.value {
+                codetracer_trace_types::ValueRecord::Int { i, .. } => Some(i),
+                _ => None,
+            },
+            _ => None,
         })
         .collect();
 
