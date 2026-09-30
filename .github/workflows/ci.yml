@@ -71,5 +71,9 @@ jobs:
       - name: Build
         run: dev-exec just build
 
+      - name: Lint
+        # rustfmt + clippy (-D warnings) from the dev shell's toolchain.
+        run: dev-exec just lint
+
       - name: Test
         run: dev-exec just test
