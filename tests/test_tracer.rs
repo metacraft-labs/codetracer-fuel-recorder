@@ -1949,7 +1949,7 @@ fn test_script_arith_test_via_ct_print_full() {
          got {functions:?}"
     );
     assert!(
-        functions.iter().any(|name| *name == "main"),
+        functions.contains(&"main"),
         "`main` must appear in the functions table as the script's \
          entry-point name; got {functions:?}"
     );

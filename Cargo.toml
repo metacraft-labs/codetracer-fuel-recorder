@@ -19,7 +19,6 @@ vec_init_then_push = "allow"
 type_complexity = "allow"
 ptr_arg = "allow"
 doc_overindented_list_items = "allow"
-doc_list_item_without_indentation = "allow"
 
 [dependencies]
 # CodeTracer trace format
