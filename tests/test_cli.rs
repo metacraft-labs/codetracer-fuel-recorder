@@ -51,6 +51,10 @@ fn record_nonexistent_dir_fails() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "project mode needs forc, which is not available on Windows"
+)]
 fn record_flow_test_creates_output_files() {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let out_dir = temp_dir.path().join("traces");
@@ -75,11 +79,11 @@ fn record_flow_test_creates_output_files() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Sway-project recording is not yet implemented (forc-pkg
-    // integration pending) — the recorder exits successfully but
-    // produces no trace artifacts.  The legacy `trace_metadata.json` /
-    // `trace_paths.json` placeholder sidecars were retired with the
-    // v3 CTFS rollout (follow-up #254 phase 2).  Check that the output
-    // dir was created.
-    assert!(out_dir.exists(), "output directory should exist");
+    // Project mode builds the project with forc and records it.
+    let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
+        .expect("output directory should exist")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "ct"))
+        .collect();
+    assert_eq!(ct_files.len(), 1, "expected one .ct trace in {out_dir:?}");
 }

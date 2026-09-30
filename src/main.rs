@@ -1,8 +1,10 @@
 //! CLI entry point for the CodeTracer Fuel recorder.
 //!
 //! Supports the `record` subcommand which either:
-//! - Builds a Sway project and executes it (when a project dir with Forc.toml is given)
-//! - Executes raw FuelVM bytecode from a .bin file (when --bytecode is given)
+//! - Builds a Sway project with `forc` and records it (when a project dir
+//!   with Forc.toml is given)
+//! - Records FuelVM bytecode from a .bin file (when --bytecode is given),
+//!   using the forc debug symbols next to it for source locations
 //!
 //! # Usage
 //!
@@ -33,8 +35,10 @@ use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 
 use codetracer_fuel_recorder::abi_decoder::AbiSchema;
+use codetracer_fuel_recorder::debug_info::ForcDebugInfo;
 use codetracer_fuel_recorder::recorder::FuelRecorder;
 use codetracer_fuel_recorder::replay::{self, ReplayConfig};
+use codetracer_fuel_recorder::source_level::write_disassembly;
 use codetracer_fuel_recorder::source_map::SwaySourceMap;
 
 // ---------------------------------------------------------------------------
@@ -123,9 +127,18 @@ struct RecordArgs {
     #[arg(short = 'o', long = "out-dir")]
     out_dir: Option<PathBuf>,
 
-    /// Path to a Sway ABI JSON file for variable name enrichment.
+    /// Path to a Sway ABI JSON file (e.g. `out/debug/<name>-abi.json`).
     #[arg(long = "abi")]
     abi: Option<PathBuf>,
+
+    /// forc debug symbols for --bytecode: the `debug_symbols.obj` (DWARF)
+    /// or a JSON source map from `forc build -g <file>.json`.
+    ///
+    /// Defaults to the debug symbols forc wrote next to the bytecode.
+    /// Without any, the trace steps through a disassembly listing written
+    /// to the output directory.
+    #[arg(long = "debug-symbols")]
+    debug_symbols: Option<PathBuf>,
 
     /// GraphQL debug API endpoint for remote tracing fallback.
     ///
@@ -234,20 +247,20 @@ fn record(args: RecordArgs) -> Result<()> {
     let out_dir = resolve_out_dir(args.out_dir);
 
     // Load ABI if provided
-    let abi = if let Some(abi_path) = &args.abi {
-        let abi_json = std::fs::read_to_string(abi_path)
-            .with_context(|| format!("failed to read ABI file: {}", abi_path.display()))?;
-        Some(AbiSchema::from_json(&abi_json)?)
-    } else {
-        None
+    let abi = match &args.abi {
+        Some(abi_path) => Some(load_abi(abi_path)?),
+        None => None,
     };
 
     if let Some(bytecode_path) = &args.bytecode {
-        // Bytecode mode: read raw bytecode from .bin file
-        return record_bytecode(bytecode_path, &out_dir, abi);
+        let debug_symbols = match &args.debug_symbols {
+            Some(path) => Some(path.clone()),
+            None => ForcDebugInfo::discover(bytecode_path),
+        };
+        return record_bytecode(bytecode_path, debug_symbols.as_deref(), &out_dir, abi);
     }
 
-    // Project dir mode: validate and record a Sway project
+    // Project dir mode: build the Sway project with forc, then record it.
     let project_dir_arg = args
         .project_dir
         .ok_or_else(|| eyre::eyre!("either PROJECT_DIR or --bytecode must be provided"))?;
@@ -264,27 +277,114 @@ fn record(args: RecordArgs) -> Result<()> {
         ));
     }
 
-    eprintln!(
-        "Project: {} ({})",
-        project_dir.display(),
-        forc_toml.display()
-    );
+    // Build into a private directory so recording never rewrites the
+    // project's own `out/`.
+    let build_dir = tempfile::Builder::new()
+        .prefix("codetracer-fuel-forc-")
+        .tempdir()
+        .context("cannot create a build directory for forc")?;
+    forc_build(&project_dir, build_dir.path())?;
 
-    // Recording from Forc.toml not yet implemented (needs forc-pkg)
-    eprintln!("Recording not yet implemented for Sway projects (use --bytecode for raw bytecode)");
+    let bytecode_path = single_bin_in(build_dir.path())?;
+    let debug_symbols = ForcDebugInfo::discover(&bytecode_path).ok_or_else(|| {
+        eyre::eyre!(
+            "forc build of {} produced no debug symbols in {}",
+            project_dir.display(),
+            build_dir.path().display()
+        )
+    })?;
+    let abi = match abi {
+        Some(abi) => Some(abi),
+        None => {
+            let stem = bytecode_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            let abi_path = build_dir.path().join(format!("{stem}-abi.json"));
+            if abi_path.is_file() {
+                Some(load_abi(&abi_path)?)
+            } else {
+                None
+            }
+        }
+    };
+    record_bytecode(&bytecode_path, Some(&debug_symbols), &out_dir, abi)
+}
 
-    // Create output directory (no placeholder sidecars — v3 emits real
-    // CTFS containers from `record_bytecode` only).
-    std::fs::create_dir_all(&out_dir)
-        .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
+/// Read and parse a Sway ABI JSON file.
+fn load_abi(path: &Path) -> Result<AbiSchema> {
+    let abi_json = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read ABI file: {}", path.display()))?;
+    AbiSchema::from_json(&abi_json)
+        .with_context(|| format!("failed to parse ABI file: {}", path.display()))
+}
 
-    eprintln!("Trace output written to {}", out_dir.display());
-
+/// Run `forc build` for `project_dir`, placing the artefacts in `out_dir`.
+fn forc_build(project_dir: &Path, out_dir: &Path) -> Result<()> {
+    eprintln!("Building {} with forc", project_dir.display());
+    let output = std::process::Command::new("forc")
+        .arg("build")
+        .arg("--path")
+        .arg(project_dir)
+        .arg("--output-directory")
+        .arg(out_dir)
+        // The JSON source map is complete; forc's default DWARF form drops
+        // its last entry.
+        .arg("--output-debug")
+        .arg(out_dir.join("debug_symbols.json"))
+        .output()
+        .map_err(|e| {
+            eyre::eyre!(
+                "recording a Sway project needs `forc` (the Sway toolchain, 0.70.x) on PATH \
+                 to build {}: {e}. Install forc, or build the project yourself and record \
+                 the result with --bytecode <project>/out/debug/<name>.bin",
+                project_dir.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(eyre::eyre!(
+            "forc build failed for {} ({}):\n{}{}",
+            project_dir.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
     Ok(())
 }
 
-/// Record a trace from raw FuelVM bytecode.
-fn record_bytecode(bytecode_path: &Path, out_dir: &Path, abi: Option<AbiSchema>) -> Result<()> {
+/// The one `.bin` bytecode file forc wrote into `dir`.
+fn single_bin_in(dir: &Path) -> Result<PathBuf> {
+    let bins: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read forc output: {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "bin"))
+        .collect();
+    match bins.as_slice() {
+        [bin] => Ok(bin.clone()),
+        [] => Err(eyre::eyre!(
+            "forc build produced no bytecode in {}",
+            dir.display()
+        )),
+        _ => Err(eyre::eyre!(
+            "forc build produced several bytecode files in {}: {bins:?}",
+            dir.display()
+        )),
+    }
+}
+
+/// Record a trace from FuelVM bytecode.
+///
+/// With forc debug symbols the trace is source-level: real source files,
+/// lines and function frames. Without them there is no source to point
+/// at, so the trace steps through a disassembly listing of the bytecode
+/// written next to the trace (line `n` = instruction `n - 1`).
+fn record_bytecode(
+    bytecode_path: &Path,
+    debug_symbols: Option<&Path>,
+    out_dir: &Path,
+    abi: Option<AbiSchema>,
+) -> Result<()> {
     let bytecode = std::fs::read(bytecode_path)
         .with_context(|| format!("failed to read bytecode file: {}", bytecode_path.display()))?;
 
@@ -293,22 +393,36 @@ fn record_bytecode(bytecode_path: &Path, out_dir: &Path, abi: Option<AbiSchema>)
         .and_then(|s| s.to_str())
         .unwrap_or("fuel-program");
 
-    // Create a synthetic source file path
-    let source_path = bytecode_path.with_extension("sw");
-
-    // Create a simple line mapping (one instruction per line)
-    let num_instructions = bytecode.len() / 4;
-    let entries: Vec<(usize, PathBuf, u32)> = (0..num_instructions)
-        .map(|i| (i, source_path.clone(), (i + 1) as u32))
-        .collect();
-    let source_map = SwaySourceMap::from_line_mapping(entries);
-
     let recorder = if let Some(abi) = abi {
         FuelRecorder::with_abi(program_name, out_dir, abi)
     } else {
         FuelRecorder::new(program_name, out_dir)
     };
-    recorder.record(bytecode, &source_map, &source_path)?;
+
+    if let Some(symbols) = debug_symbols {
+        let debug = ForcDebugInfo::load(symbols)?;
+        eprintln!("Using debug symbols {}", symbols.display());
+        recorder.record_with_debug_info(bytecode, &debug)?;
+    } else {
+        eprintln!(
+            "warning: no forc debug symbols found next to {}; recording against a \
+             disassembly listing (pass --debug-symbols for source-level traces)",
+            bytecode_path.display()
+        );
+        std::fs::create_dir_all(out_dir)
+            .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
+        let listing = out_dir
+            .canonicalize()
+            .unwrap_or_else(|_| out_dir.to_path_buf())
+            .join(format!("{program_name}.fuelasm"));
+        write_disassembly(&bytecode, &listing)?;
+        let num_instructions = bytecode.len() / 4;
+        let entries: Vec<(usize, PathBuf, u32)> = (0..num_instructions)
+            .map(|i| (i, listing.clone(), (i + 1) as u32))
+            .collect();
+        let source_map = SwaySourceMap::from_line_mapping(entries);
+        recorder.record(bytecode, &source_map, &listing)?;
+    }
 
     eprintln!("Trace output written to {}", out_dir.display());
     Ok(())
