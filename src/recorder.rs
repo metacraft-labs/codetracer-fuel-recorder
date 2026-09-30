@@ -1503,7 +1503,7 @@ impl FuelRecorder {
 /// `Call` / `Return` / `ReturnData` are intentionally NOT mirrored here —
 /// they are already covered by the [`ContractCallTracker::process_receipts`]
 /// path which emits canonical `register_call` / `register_return` records.
-fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
+pub(crate) fn emit_receipt_special_event(writer: &mut dyn TraceWriter, receipt: &Receipt) {
     match receipt {
         // Already handled as register_call / register_return.
         Receipt::Call { .. } | Receipt::Return { .. } | Receipt::ReturnData { .. } => {}

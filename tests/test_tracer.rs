@@ -1571,21 +1571,18 @@ fn flow_test_project_dir() -> PathBuf {
 /// `CODETRACER_FUEL_RECORDER_OUT_DIR` must be honoured as a fallback
 /// for `--out-dir`.  Convention: `Recorder-CLI-Conventions.md` §5.
 ///
-/// We exercise the env var via the placeholder Sway-project `record`
-/// path (which writes `trace_metadata.json` / `trace_paths.json` into
-/// `--out-dir` even though the CTFS pipeline is not yet wired in for
-/// Forc projects).  This is enough to prove the env-var fallback is
-/// honoured at the `--out-dir` resolution step.
+/// Records the committed `flow_test` bytecode, so the env-var contract is
+/// checked without needing `forc` to build a project.
 #[test]
 fn test_env_out_dir_used_when_flag_omitted() {
     let tmp_dir = tempfile::tempdir().expect("tempdir");
     let env_out_dir = tmp_dir.path().join("via-env");
 
-    let project_dir = flow_test_project_dir();
+    let bytecode = flow_test_project_dir().join("out/debug/flow_test.bin");
 
     let output = Command::new(env!("CARGO_BIN_EXE_codetracer-fuel-recorder"))
-        .args(["record"])
-        .arg(&project_dir)
+        .args(["record", "--bytecode"])
+        .arg(&bytecode)
         .env("CODETRACER_FUEL_RECORDER_OUT_DIR", &env_out_dir)
         // Make sure the env-var doesn't bleed in from the developer's shell.
         .env_remove("CODETRACER_FUEL_RECORDER_DISABLED")
@@ -1599,13 +1596,9 @@ fn test_env_out_dir_used_when_flag_omitted() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // The placeholder Sway-project path no longer writes JSON sidecars
-    // — the legacy `trace_metadata.json` / `trace_paths.json` placeholders
-    // were retired with the v3 CTFS rollout (follow-up #254 phase 2).
-    // The env-var-supplied output dir must still have been created.
     assert!(
-        env_out_dir.exists(),
-        "expected the env-supplied output dir {:?} to be created",
+        !ct_files_in(&env_out_dir).is_empty(),
+        "expected the trace in the env-supplied output dir {:?}",
         env_out_dir
     );
 }

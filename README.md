@@ -35,26 +35,40 @@ cargo build
 
 ### Usage
 
-#### Record raw FuelVM bytecode
-
-```bash
-codetracer-fuel-recorder record --bytecode <FILE.bin> --out-dir <dir>
-```
-
-Reads the raw FuelVM bytecode from `FILE.bin`, executes it under
-single-stepping, and writes a CTFS trace bundle to `--out-dir`.
-
-#### Record a Sway project (placeholder)
+#### Record a Sway project
 
 ```bash
 codetracer-fuel-recorder record <PROJECT_DIR> --out-dir <dir>
 ```
 
-`PROJECT_DIR` must contain a `Forc.toml`. End-to-end Sway-project
-recording (forc-pkg integration) is not yet implemented; the placeholder
-path writes `trace_metadata.json` / `trace_paths.json` to `--out-dir`
-for backward compatibility. Use `--bytecode` for full CTFS recording
-today.
+`PROJECT_DIR` must contain a `Forc.toml`. The recorder builds it with
+`forc` (0.70.x, which must be on `PATH`; the project's own `out/` is left
+untouched) and records the result at source level. If `forc` is missing
+or the build fails, the command fails.
+
+#### Record forc-built bytecode
+
+```bash
+codetracer-fuel-recorder record --bytecode <project>/out/debug/<name>.bin --out-dir <dir>
+```
+
+Executes the bytecode under single-stepping and writes a CTFS trace
+bundle to `--out-dir`. The debug symbols `forc build` writes next to the
+bytecode (`debug_symbols.obj`, or a JSON map from `forc build -g
+<file>.json`) are picked up automatically, or can be named with
+`--debug-symbols <file>`. With them the trace records the Sway source
+files and lines that execute, and a frame for every function call.
+`--abi <file>` accepts the ABI JSON forc writes (`<name>-abi.json`).
+
+What forc's debug symbols do not contain cannot be recorded: they map
+instructions to source spans but describe no local variables, so no
+locals are recorded; functions forc inlines (it inlines even in debug
+builds) run in their caller's frame at the call site's line. Mark a
+function `#[inline(never)]` to keep its own frame and lines.
+
+Bytecode without any debug symbols is recorded against a disassembly
+listing (`<name>.fuelasm`, one instruction per line) written to
+`--out-dir`.
 
 The recorder always writes traces in the canonical CodeTracer CTFS
 multi-stream format. There is no `--format` flag — see "Converting

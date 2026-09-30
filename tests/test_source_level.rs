@@ -197,6 +197,21 @@ fn record_bytecode_into(bin: &Path, extra: &[&str]) -> (tempfile::TempDir, Value
     (out_dir, doc)
 }
 
+/// Record the project in project mode and return the output directory and
+/// the `ct-print --full` document.
+fn record_project(p: &Project) -> (tempfile::TempDir, Value) {
+    let out_dir = tempfile::tempdir().expect("out dir");
+    let out = run_recorder(&[
+        "record".as_ref(),
+        p.dir.as_os_str(),
+        "--out-dir".as_ref(),
+        out_dir.path().as_os_str(),
+    ]);
+    assert_success(&out, "record <PROJECT_DIR>");
+    let doc = ct_print(&ct_file_in(out_dir.path()));
+    (out_dir, doc)
+}
+
 fn events(doc: &Value) -> &Vec<Value> {
     doc["events"].as_array().expect("events array")
 }
@@ -274,8 +289,8 @@ fn dwarf_contents(obj_path: &Path) -> (Vec<String>, Vec<(String, u64)>) {
             .and_then(|s| s.uncompressed_data().ok())
             .unwrap_or(std::borrow::Cow::Borrowed(&[])))
     };
-    let dwarf_cow = gimli::Dwarf::load(load).expect("load DWARF");
-    let dwarf = dwarf_cow.borrow(|s| gimli::EndianSlice::new(s, endian));
+    let sections = gimli::DwarfSections::load(load).expect("load DWARF");
+    let dwarf = sections.borrow(|s| gimli::EndianSlice::new(s, endian));
 
     let mut tags = Vec::new();
     let mut rows = Vec::new();
@@ -288,10 +303,8 @@ fn dwarf_contents(obj_path: &Path) -> (Vec<String>, Vec<(String, u64)>) {
         }
         if let Some(program) = unit.line_program.clone() {
             let mut it = program.rows();
+            // forc's end-of-sequence row carries its last entry's location.
             while let Some((header, row)) = it.next_row().expect("line row") {
-                if row.end_sequence() {
-                    continue;
-                }
                 let file = row
                     .file(header)
                     .and_then(|f| dwarf.attr_string(&unit, f.path_name()).ok())
@@ -479,9 +492,9 @@ fn bytecode_mode_records_the_main_frame() {
 /// caller, holding its own body's lines.
 #[test]
 #[cfg_attr(windows, ignore = "forc is not available on Windows")]
-fn bytecode_mode_records_a_called_function_frame() {
-    let p = Project::built("trivial_chain_noinline");
-    let doc = record_bytecode(&p.bin(), &[]);
+fn project_mode_records_a_called_function_frame() {
+    let p = Project::copy_of("trivial_chain_noinline");
+    let (_out, doc) = record_project(&p);
 
     let main = call_named(&doc, "main");
     let compute = call_named(&doc, "compute");
@@ -547,15 +560,11 @@ fn forc_source_map_attributes_inlined_compute_to_its_call_site() {
 #[cfg_attr(windows, ignore = "forc is not available on Windows")]
 fn project_mode_builds_and_records() {
     let p = Project::copy_of("simple_trivial_chain");
-    let out_dir = tempfile::tempdir().expect("out dir");
-    let out = run_recorder(&[
-        "record".as_ref(),
-        p.dir.as_os_str(),
-        "--out-dir".as_ref(),
-        out_dir.path().as_os_str(),
-    ]);
-    assert_success(&out, "record <PROJECT_DIR>");
-    let doc = ct_print(&ct_file_in(out_dir.path()));
+    let (_out, doc) = record_project(&p);
+    assert!(
+        !p.dir.join("out").exists(),
+        "project mode must not write into the project's own out/"
+    );
     let lines = step_lines_in(&doc, &p.main_sw());
     assert!(
         lines.contains(&24) && lines.contains(&25),
@@ -636,5 +645,41 @@ fn bytecode_without_debug_symbols_names_no_missing_file() {
             "trace names a file that does not exist: {}",
             path.display()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Debug-symbol formats
+// ---------------------------------------------------------------------------
+
+/// The DWARF `debug_symbols.obj` and the JSON source map (`forc build -g
+/// <file>.json`) of the same build agree entry for entry — except that the
+/// DWARF form lacks the JSON's last entry (forc never writes that row; see
+/// `debug_info`). When this starts failing on that exception, forc's DWARF
+/// has become complete.
+#[test]
+#[cfg_attr(windows, ignore = "forc is not available on Windows")]
+fn dwarf_debug_symbols_match_the_json_map_but_its_last_entry() {
+    use codetracer_fuel_recorder::debug_info::ForcDebugInfo;
+
+    for fixture in ["simple_trivial_chain", "trivial_chain_noinline"] {
+        let p = Project::built(fixture);
+        let json = p.dir.join("source-map.json");
+        let out = Command::new("forc")
+            .arg("build")
+            .arg("-g")
+            .arg(&json)
+            .current_dir(&p.dir)
+            .output()
+            .expect("forc build -g");
+        assert_success(&out, "forc build -g <file>.json");
+
+        let from_dwarf = ForcDebugInfo::load(&p.debug_symbols()).expect("load DWARF");
+        let from_json = ForcDebugInfo::load(&json).expect("load JSON");
+        let dwarf: Vec<_> = from_dwarf.entries().collect();
+        let mut json: Vec<_> = from_json.entries().collect();
+        assert!(json.len() > 1, "{fixture}: JSON map is too small: {json:?}");
+        json.pop();
+        assert_eq!(dwarf, json, "{fixture}: DWARF and JSON source maps differ");
     }
 }
