@@ -2,8 +2,7 @@
 .env
 .direnv
 
-# Nix-generated pre-commit config
-.pre-commit-config.yaml
+# Portable standard-hook rules are committed in .pre-commit-config.yaml.
 
 # reprobuild build artifacts
 .repro/

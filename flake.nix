@@ -24,6 +24,16 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ mcl-blockchain.devShells.${system}.fuel ];
           packages = [
+            # Portable mcl-standard-hooks rules are committed separately.
+            # This owning locked shell supplies their native executables.
+            pkgs.prek
+            pkgs.uv
+            pkgs.editorconfig-checker
+            pkgs.nixfmt-rfc-style
+            pkgs.opentofu
+            pkgs.nodePackages.prettier
+            pkgs.python3
+            pkgs.git
             pkgs.zstd # required by libcodetracer_trace_writer (Nim FFI)
             # Declare the toolchain explicitly so CI's dev shell
             # mirrors local dev exactly.  Cached mcl-blockchain
@@ -54,6 +64,9 @@
           # credentials when present: the download cache is shared, and only
           # the proxy directory is left behind.
           shellHook = ''
+            # Execute the configured upstream hooks faithfully; Prek0.2.17
+            # native size rounding differs at the exact 1 MiB boundary.
+            export PREK_NO_FAST_PATH=1
             _fuel_real_cargo_home="''${CARGO_HOME:-$HOME/.cargo}"
             _fuel_cargo_home="''${XDG_CACHE_HOME:-$HOME/.cache}/codetracer-fuel-recorder/cargo-home"
             if [ "$_fuel_real_cargo_home" != "$_fuel_cargo_home" ]; then

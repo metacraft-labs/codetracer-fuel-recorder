@@ -105,18 +105,18 @@ tests, debugging, and interop with non-CodeTracer tools.
 
 The recorder is structured around the following modules in `src/`:
 
-| Module | Purpose |
-|---|---|
-| `main.rs` | CLI entry point (clap) |
-| `recorder.rs` | Top-level recording orchestration; receipt → event-log routing |
-| `interpreter.rs` | Single-stepping FuelVM driver |
-| `source_map.rs` | Mapping between FuelVM PC and Sway source locations |
-| `contract_call.rs` | Cross-contract Call/Return tracking via FuelVM receipts |
-| `variable_tracker.rs` | Heuristic register → variable-name inference |
-| `abi_decoder.rs` | Sway ABI JSON parsing for variable enrichment |
-| `replay.rs` | fuel-core GraphQL replay |
-| `graphql_debug.rs` | fuel-core debug API client |
-| `lib.rs` | Public library API |
+| Module                | Purpose                                                        |
+| --------------------- | -------------------------------------------------------------- |
+| `main.rs`             | CLI entry point (clap)                                         |
+| `recorder.rs`         | Top-level recording orchestration; receipt → event-log routing |
+| `interpreter.rs`      | Single-stepping FuelVM driver                                  |
+| `source_map.rs`       | Mapping between FuelVM PC and Sway source locations            |
+| `contract_call.rs`    | Cross-contract Call/Return tracking via FuelVM receipts        |
+| `variable_tracker.rs` | Heuristic register → variable-name inference                   |
+| `abi_decoder.rs`      | Sway ABI JSON parsing for variable enrichment                  |
+| `replay.rs`           | fuel-core GraphQL replay                                       |
+| `graphql_debug.rs`    | fuel-core debug API client                                     |
+| `lib.rs`              | Public library API                                             |
 
 ### Testing
 
@@ -132,21 +132,21 @@ Integration test programs live in `test-programs/`.
 The recorder respects the standard CodeTracer recorder env-var contract
 defined in `Recorder-CLI-Conventions.md` §5:
 
-| Variable | CLI equivalent | Description |
-|---|---|---|
-| `CODETRACER_FUEL_RECORDER_OUT_DIR` | `--out-dir` | Fallback output directory when `--out-dir` is omitted. The CLI flag always wins. |
-| `CODETRACER_FUEL_RECORDER_DISABLED` | — | Set to `1` or `true` to run the recorder in pass-through mode (no trace artefacts written). |
-| `CODETRACER_FUEL_RECORDER_LOG_LEVEL` | — | Recorder log verbosity (advisory; the Fuel recorder currently logs to stderr unconditionally). |
+| Variable                             | CLI equivalent | Description                                                                                    |
+| ------------------------------------ | -------------- | ---------------------------------------------------------------------------------------------- |
+| `CODETRACER_FUEL_RECORDER_OUT_DIR`   | `--out-dir`    | Fallback output directory when `--out-dir` is omitted. The CLI flag always wins.               |
+| `CODETRACER_FUEL_RECORDER_DISABLED`  | —              | Set to `1` or `true` to run the recorder in pass-through mode (no trace artefacts written).    |
+| `CODETRACER_FUEL_RECORDER_LOG_LEVEL` | —              | Recorder log verbosity (advisory; the Fuel recorder currently logs to stderr unconditionally). |
 
 ### Contributing
 
 We'd be very happy if the community finds this useful, and if anyone wants to:
 
-* Use and test the Fuel/Sway support of CodeTracer.
-* Provide feedback and discuss alternative implementation ideas: in the
+- Use and test the Fuel/Sway support of CodeTracer.
+- Provide feedback and discuss alternative implementation ideas: in the
   issue tracker, or in our [discord](https://discord.gg/qSDCAFMP).
-* Contribute code to enhance the Fuel/Sway support of CodeTracer.
-* Provide [sponsorship](https://opencollective.com/codetracer), so we
+- Contribute code to enhance the Fuel/Sway support of CodeTracer.
+- Provide [sponsorship](https://opencollective.com/codetracer), so we
   can hire dedicated full-time maintainers for this project.
 
 ### Legal info
