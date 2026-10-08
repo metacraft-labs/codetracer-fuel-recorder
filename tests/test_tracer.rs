@@ -840,17 +840,17 @@ fn test_control_flow_test_via_ct_print_full() {
         "r19 = 0 (else branch)"
     );
 
-    // ----- io_event: exactly one ioStderr line for the LOG receipt ----
+    // ----- io_event: exactly one EvmEvent line for the LOG receipt ----
     // The recorder routes Receipt::Log through register_special_event
     // with EventLogKind::EvmEvent, which the writer surfaces as
-    // io_kind = "ioStderr".  The text payload includes the four LOG
+    // io_kind = "EvmEvent".  The text payload includes the four LOG
     // operand values; we assert on the exact `rd=` field (which carries
     // the LOG's `d` register, here 0) so that any drift in the
     // formatter is caught.
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1, "exactly one io_event expected");
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr", "Receipt::Log must route to ioStderr");
+    assert_eq!(kind, "EvmEvent", "Receipt::Log must be an EvmEvent");
     assert!(
         text.starts_with("ra=") && text.contains("rb=") && text.contains("pc=0x"),
         "LOG receipt text must include the four LOG operands and pc; got: {text}"
@@ -1204,7 +1204,7 @@ fn test_collections_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1, "exactly one LOGD io_event expected");
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr", "LOGD receipts route to ioStderr");
+    assert_eq!(kind, "EvmEvent", "LOGD receipts be an EvmEvent");
     assert!(
         text.contains("len=8"),
         "LOGD payload text must report len=8; got: {text}"
@@ -1384,8 +1384,8 @@ fn test_error_paths_test_emits_revert_event() {
     );
     let (kind, text) = &io_events[0];
     assert!(
-        kind == "ioError" || kind == "ioStderr",
-        "Revert receipt should route through the error channel; got io_kind={kind}"
+        kind == "Error",
+        "Revert receipt should be an Error event; got io_kind={kind}"
     );
     assert!(
         text.contains("FuelRevert") || text.contains("code=99"),
@@ -1553,7 +1553,7 @@ fn test_while_loop_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1, "exactly one LOG io_event expected");
     let (kind, _text) = &io_events[0];
-    assert_eq!(kind, "ioStderr", "LOG receipt must route to ioStderr");
+    assert_eq!(kind, "EvmEvent", "LOG receipt must be an EvmEvent");
 }
 
 // ===========================================================================
@@ -2005,7 +2005,7 @@ fn test_script_arith_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1, "exactly one log io_event expected");
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr", "Sway log() must route to ioStderr");
+    assert_eq!(kind, "EvmEvent", "Sway log() must be an EvmEvent");
     assert!(
         text.contains("data=0x000000000000002a"),
         "LOG payload must include the big-endian u64 encoding of 42 \
@@ -2187,7 +2187,7 @@ fn test_contract_abi_dispatch_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1);
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr");
+    assert_eq!(kind, "EvmEvent");
     assert!(
         text.contains("ra=43"),
         "LOG receipt must carry ra=43 (the dispatched method's result); got: {text}"
@@ -2461,8 +2461,8 @@ fn test_panic_receipt_test_via_ct_print_full() {
     assert_eq!(io_events.len(), 2);
     let (storage_kind, storage_text) = &io_events[0];
     assert_eq!(
-        storage_kind, "ioStderr",
-        "SRW per-opcode io_event routes through ioStderr (EvmEvent kind)"
+        storage_kind, "EvmEvent",
+        "SRW per-opcode io_event is an EvmEvent"
     );
     assert!(
         storage_text.starts_with("opcode=SRW"),
@@ -2470,8 +2470,8 @@ fn test_panic_receipt_test_via_ct_print_full() {
     );
     let (panic_kind, panic_text) = &io_events[1];
     assert_eq!(
-        panic_kind, "ioError",
-        "Receipt::Panic must route through the error channel (ioError); \
+        panic_kind, "Error",
+        "Receipt::Panic must route through the Error kind; \
          got io_kind={panic_kind}"
     );
     assert!(
@@ -2539,7 +2539,7 @@ fn test_storage_block_test_via_ct_print_full() {
 
     // First io_event: the per-opcode SRW marker.
     let (kind0, text0) = &io_events[0];
-    assert_eq!(kind0, "ioStderr", "SRW io_event routes through ioStderr");
+    assert_eq!(kind0, "EvmEvent", "SRW io_event is an EvmEvent");
     assert!(
         text0.starts_with("opcode=SRW"),
         "SRW io_event text must start with `opcode=SRW`; got: {text0}"
@@ -2551,7 +2551,7 @@ fn test_storage_block_test_via_ct_print_full() {
 
     // Second io_event: the terminal Panic.
     let (kind1, text1) = &io_events[1];
-    assert_eq!(kind1, "ioError", "Panic routes through ioError");
+    assert_eq!(kind1, "Error", "Panic is an Error event");
     // The `register_special_event(EventLogKind::Error, "FuelPanic",
     // <metadata>)` call surfaces in ct-print --full as an io_event whose
     // `text` slot carries the metadata payload (the name "FuelPanic" is
@@ -2623,7 +2623,7 @@ fn test_storage_map_test_via_ct_print_full() {
     // First io_event: the per-opcode SWW marker — must include the
     // value register and the key_addr register.
     let (kind0, text0) = &io_events[0];
-    assert_eq!(kind0, "ioStderr", "SWW io_event routes through ioStderr");
+    assert_eq!(kind0, "EvmEvent", "SWW io_event is an EvmEvent");
     assert!(
         text0.starts_with("opcode=SWW"),
         "SWW io_event text must start with `opcode=SWW`; got: {text0}"
@@ -2635,7 +2635,7 @@ fn test_storage_map_test_via_ct_print_full() {
     );
 
     let (kind1, text1) = &io_events[1];
-    assert_eq!(kind1, "ioError", "Panic routes through ioError");
+    assert_eq!(kind1, "Error", "Panic is an Error event");
     // The `register_special_event(EventLogKind::Error, "FuelPanic",
     // <metadata>)` call surfaces in ct-print --full as an io_event whose
     // `text` slot carries the metadata payload (the name "FuelPanic" is
@@ -2958,8 +2958,8 @@ fn test_vec_dynamic_test_via_ct_print_full() {
     assert_eq!(io_events.len(), 4);
     for (i, (kind, text)) in io_events.iter().enumerate() {
         assert_eq!(
-            kind, "ioStderr",
-            "LOGD receipt {i} must route through ioStderr"
+            kind, "EvmEvent",
+            "LOGD receipt {i} must be an EvmEvent"
         );
         let want_len = (i + 1) * 8;
         assert!(
@@ -3409,7 +3409,7 @@ fn test_storage_vec_test_via_ct_print_full() {
     assert_eq!(io_events.len(), 2);
 
     let (kind0, text0) = &io_events[0];
-    assert_eq!(kind0, "ioStderr", "SWW io_event routes through ioStderr");
+    assert_eq!(kind0, "EvmEvent", "SWW io_event is an EvmEvent");
     assert!(
         text0.starts_with("opcode=SWW"),
         "first io_event must be the per-opcode SWW push marker; got: {text0}"
@@ -3425,7 +3425,7 @@ fn test_storage_vec_test_via_ct_print_full() {
     );
 
     let (kind1, text1) = &io_events[1];
-    assert_eq!(kind1, "ioError", "Panic routes through ioError");
+    assert_eq!(kind1, "Error", "Panic is an Error event");
     assert!(
         text1.contains("ExpectedInternalContext"),
         "Panic io_event metadata must identify the FuelVM panic reason \
@@ -3900,7 +3900,7 @@ fn test_array_fixed_test_via_ct_print_full() {
 
     // ----- io_event payload: the 32-byte LOGD ------------------------
     // Pin the canonical LOGD io_event surface: exactly one io_event,
-    // routed through ioStderr, whose text payload includes the
+    // an EvmEvent, whose text payload includes the
     // structured `len=` slot reporting the 32-byte payload size.
     // The full text shape is `ra=0 rb=0 len=32 pc=0x... data=0x...`;
     // we extract the `len=` field and assert on the exact integer
@@ -3908,7 +3908,7 @@ fn test_array_fixed_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1, "exactly one LOGD io_event expected");
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr", "LOGD receipt must route to ioStderr");
+    assert_eq!(kind, "EvmEvent", "LOGD receipt must be an EvmEvent");
     let len_field: u64 = text
         .split_whitespace()
         .find_map(|tok| tok.strip_prefix("len="))
@@ -4919,7 +4919,7 @@ fn test_bytes_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1, "exactly one LOGD io_event expected");
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr", "LOGD receipt must route to ioStderr");
+    assert_eq!(kind, "EvmEvent", "LOGD receipt must be an EvmEvent");
     let len_field: u64 = text
         .split_whitespace()
         .find_map(|tok| tok.strip_prefix("len="))
@@ -5334,8 +5334,8 @@ fn test_log_builtin_test_via_ct_print_full() {
     assert_eq!(io_events.len(), 3, "exactly three log io_events expected");
     let (kind0, text0) = &io_events[0];
     assert_eq!(
-        kind0, "ioStderr",
-        "log(u64) Receipt::Log must route through ioStderr (EvmEvent kind)"
+        kind0, "EvmEvent",
+        "log(u64) Receipt::Log must route as an EvmEvent"
     );
     // Receipt::Log surfaces as `ra={ra} rb={rb} rc={rc} rd={rd} pc={pc:#x}`.
     // The `op::log(r16, 0, 0, 0)` call sets a=r16=42, b=c=d=0.  Pin the
@@ -5364,8 +5364,8 @@ fn test_log_builtin_test_via_ct_print_full() {
     // ----- io_event 1: log(struct{7,11}) — Receipt::LogData (16 bytes) -
     let (kind1, text1) = &io_events[1];
     assert_eq!(
-        kind1, "ioStderr",
-        "log(struct) Receipt::LogData must route through ioStderr"
+        kind1, "EvmEvent",
+        "log(struct) Receipt::LogData must be an EvmEvent"
     );
     let len1: u64 = text1
         .split_whitespace()
@@ -5389,8 +5389,8 @@ fn test_log_builtin_test_via_ct_print_full() {
     // ----- io_event 2: log("hello") — Receipt::LogData (5 bytes) -------
     let (kind2, text2) = &io_events[2];
     assert_eq!(
-        kind2, "ioStderr",
-        "log(str) Receipt::LogData must route through ioStderr"
+        kind2, "EvmEvent",
+        "log(str) Receipt::LogData must be an EvmEvent"
     );
     let len2: u64 = text2
         .split_whitespace()
@@ -5513,8 +5513,8 @@ fn test_require_revert_test_via_ct_print_full() {
     assert_eq!(io_fail.len(), 1);
     let (kind_fail, text_fail) = &io_fail[0];
     assert_eq!(
-        kind_fail, "ioError",
-        "failing require Receipt::Revert must route through ioError"
+        kind_fail, "Error",
+        "failing require Receipt::Revert must be an Error event"
     );
     let code_fail: u64 = text_fail
         .split_whitespace()
@@ -5576,8 +5576,8 @@ fn test_require_revert_test_via_ct_print_full() {
     assert_eq!(io_revert.len(), 1);
     let (kind_revert, text_revert) = &io_revert[0];
     assert_eq!(
-        kind_revert, "ioError",
-        "revert(42) Receipt::Revert must route through ioError"
+        kind_revert, "Error",
+        "revert(42) Receipt::Revert must be an Error event"
     );
     let code_revert: u64 = text_revert
         .split_whitespace()
@@ -5661,8 +5661,8 @@ fn test_hashing_test_via_ct_print_full() {
     let io_sha = observed_io_events(&doc_sha);
     let (kind_sha, text_sha) = &io_sha[0];
     assert_eq!(
-        kind_sha, "ioStderr",
-        "sha256 LOGD receipt must route to ioStderr"
+        kind_sha, "EvmEvent",
+        "sha256 LOGD receipt must be an EvmEvent"
     );
     let len_sha: u64 = text_sha
         .split_whitespace()
@@ -5733,8 +5733,8 @@ fn test_hashing_test_via_ct_print_full() {
     let io_keccak = observed_io_events(&doc_keccak);
     let (kind_keccak, text_keccak) = &io_keccak[0];
     assert_eq!(
-        kind_keccak, "ioStderr",
-        "keccak256 LOGD receipt must route to ioStderr"
+        kind_keccak, "EvmEvent",
+        "keccak256 LOGD receipt must be an EvmEvent"
     );
     let len_keccak: u64 = text_keccak
         .split_whitespace()
@@ -6440,7 +6440,7 @@ fn test_ref_param_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 2);
     let (kind0, text0) = &io_events[0];
-    assert_eq!(kind0, "ioStderr");
+    assert_eq!(kind0, "EvmEvent");
     let ra0: u64 = text0
         .split_whitespace()
         .find_map(|tok| tok.strip_prefix("ra="))
@@ -6453,7 +6453,7 @@ fn test_ref_param_test_via_ct_print_full() {
          text={text0}"
     );
     let (kind1, text1) = &io_events[1];
-    assert_eq!(kind1, "ioStderr");
+    assert_eq!(kind1, "EvmEvent");
     let ra1: u64 = text1
         .split_whitespace()
         .find_map(|tok| tok.strip_prefix("ra="))
@@ -6612,7 +6612,7 @@ fn test_inline_asm_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 1);
     let (kind, text) = &io_events[0];
-    assert_eq!(kind, "ioStderr");
+    assert_eq!(kind, "EvmEvent");
     let ra: u64 = text
         .split_whitespace()
         .find_map(|tok| tok.strip_prefix("ra="))
