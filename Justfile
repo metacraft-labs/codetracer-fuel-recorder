@@ -32,7 +32,7 @@ format:
 
 fmt: format
 # --- M13: Packaging UX Standardization ---
-# These recipes implement Repo-Requirements.md §2.8. The OS-packaged
+# These recipes implement Repo-Requirements.md §2.5. The OS-packaged
 # recorders share a uniform packaging surface: `bump-version` rewrites
 # Cargo.toml + packaging/recorder-metadata.yml; `build-package` shells
 # out to packaging/build-all.sh with the requested channel selector;
@@ -223,3 +223,9 @@ verify-scoop:
 
 verify-chocolatey:
     just verify-package chocolatey
+
+# Install genuine canonical checks and preserve matching Repro publication hooks.
+# Pass the actual matching engine explicitly; unqualified protocols fail.
+[positional-arguments]
+install-hooks REPRO:
+    python3 tools/install-canonical-hooks.py --repro "$1"
