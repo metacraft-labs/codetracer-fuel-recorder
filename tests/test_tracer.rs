@@ -1383,10 +1383,7 @@ fn test_error_paths_test_emits_revert_event() {
         "expected exactly one error io_event for the RVRT receipt; got: {io_events:?}"
     );
     let (kind, text) = &io_events[0];
-    assert!(
-        kind == "Error",
-        "Revert receipt should be an Error event; got io_kind={kind}"
-    );
+    assert_eq!(kind, "Error", "Revert receipt must be an Error event");
     assert!(
         text.contains("FuelRevert") || text.contains("code=99"),
         "Revert text payload should identify the revert and carry code=99; got: {text}"
@@ -2957,10 +2954,7 @@ fn test_vec_dynamic_test_via_ct_print_full() {
     let io_events = observed_io_events(&doc);
     assert_eq!(io_events.len(), 4);
     for (i, (kind, text)) in io_events.iter().enumerate() {
-        assert_eq!(
-            kind, "EvmEvent",
-            "LOGD receipt {i} must be an EvmEvent"
-        );
+        assert_eq!(kind, "EvmEvent", "LOGD receipt {i} must be an EvmEvent");
         let want_len = (i + 1) * 8;
         assert!(
             text.contains(&format!("len={want_len}")),
