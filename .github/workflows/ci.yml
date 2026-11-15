@@ -55,6 +55,25 @@ jobs:
           attic-cache: ${{ vars.ATTIC_CACHE }}
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
+      - name: Install the repro CLI
+        # `just lint` and `just test` run tests/test_canonical_hook_installation.py,
+        # which qualifies the hook installer against a real, selected Repro
+        # engine and deliberately fails without one rather than skipping.
+        # The flake's dev shell does not provide `repro` (locally the installer
+        # uses the operator's own engine, the one that services their managed
+        # hooks), and the nix flavor of setup-dev-env installs none, so install it here
+        # with the same action and default release (`latest`) that setup-dev-env
+        # uses for ci-reprobuild.yml. It prepends the CLI to PATH for later
+        # steps, and `dev-exec` (`nix develop --command`) keeps that PATH.
+        uses: metacraft-labs/metacraft-github-actions/setup-reprobuild@dev
+        with:
+          gh-token: ${{ steps.app-token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
+
       - name: Build Nim trace writer library (sibling artifact)
         # TODO: replace with `direnv exec ../codetracer-trace-format-nim
         # just build-trace-writer-lib` once the sibling repo ships
