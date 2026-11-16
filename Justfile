@@ -11,6 +11,7 @@ build-release:
   cargo build --release --locked
 
 test:
+  python3 -m unittest discover -s tests -p test_canonical_hook_installation.py
   cargo test --locked
   bash tests/verify-cli-convention-no-silent-skip.sh
 
@@ -19,13 +20,18 @@ t: test
 test-rust:
   cargo test --locked
 
+verify-dev-shell-darwin:
+  bash tests/verify-dev-shell-evaluates-on-darwin.sh
+
 verify-cli-convention:
   bash tests/verify-cli-convention-no-silent-skip.sh
 
 lint:
+  python3 -m unittest discover -s tests -p test_canonical_hook_installation.py
   cargo fmt --check
   cargo clippy --locked --all-targets -- -D warnings
   bash tests/verify-cli-convention-no-silent-skip.sh
+  bash tests/verify-dev-shell-evaluates-on-darwin.sh
 
 format:
   cargo fmt

@@ -2,7 +2,7 @@
   description = "CodeTracer Fuel Recorder";
 
   inputs = {
-    mcl-blockchain.url = "github:metacraft-labs/nix-blockchain-development";
+    mcl-blockchain.url = "github:metacraft-labs/nix-blockchain-development/agents";
     nixpkgs.follows = "mcl-blockchain/nixpkgs";
     flake-utils.follows = "mcl-blockchain/flake-utils";
   };
@@ -22,8 +22,14 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          inputsFrom = [ mcl-blockchain.devShells.${system}.fuel ];
+          # nix-blockchain-development exports its `fuel` shell only where its
+          # SDK exists (Linux). Elsewhere, such as macOS, the tools it would
+          # supply are declared below, so the shell still evaluates.
+          inputsFrom = pkgs.lib.optional (
+            mcl-blockchain.devShells.${system} ? fuel
+          ) mcl-blockchain.devShells.${system}.fuel;
           packages = [
+            pkgs.openssl # openssl-sys; not supplied where the mcl-blockchain shell is absent
             # Portable mcl-standard-hooks rules are committed separately.
             # This owning locked shell supplies their native executables.
             pkgs.prek
