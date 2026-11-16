@@ -67,6 +67,12 @@ package codetracer_fuel_recorder:
     # the same ``bash tests/verify-cli-convention-no-silent-skip.sh``
     # step ``just test`` runs after ``cargo test``.
     "sh"
+    "bash"
+    "dirname"
+    "grep"
+    # ``nimble install --depsOnly`` in ``codetracer_trace_writer_nim``'s
+    # build.rs fetches the FFI's requirements with git.
+    "git"
 
     # Language-specific compiler / runtime tools. ``forc`` (the Sway
     # compiler) is Linux/macOS-only — FuelLabs/sway publishes no
@@ -184,5 +190,35 @@ package codetracer_fuel_recorder:
         "Cargo.toml", "Cargo.lock", "src"
       ],
       cacheable = false)
+
+    # ---- Tool identities each edge runs --------------------------------
+    #
+    # A ``uses:`` declaration alone does not reach an edge: under typed
+    # provisioning an action's PATH (and pkg-config search path) is built
+    # from the tool identities registered on it. Without these the cargo
+    # edges ran with no ``nim`` / ``nimble`` on PATH, and
+    # ``codetracer_trace_writer_nim``'s build.rs failed at ``nimble install
+    # --depsOnly``; on macOS they also ran without the Nix clang wrapper, so
+    # linking zstd-sys's build script failed on ``-liconv``. Every cargo edge
+    # builds that crate, so each gets what its build scripts run: ``nimble``
+    # (which fetches with ``git``) and ``nim`` for the Nim FFI, ``capnp`` for
+    # ``codetracer_trace_format_capnp``, the C compiler for cc-rs builds
+    # (zstd-sys, ring, secp256k1-sys, ...) and rustc's link step, and
+    # ``pkg-config`` with ``openssl``, which openssl-sys locates through it.
+    # The test run also ``forc build``s the Sway fixtures
+    # (``tests/test_source_level.rs``) on the hosts where ``forc`` exists.
+    # Windows registers no C compiler: Cargo links with MSVC there and the
+    # Nim FFI compiles with ``--cc:vcc``. The CLI check runs ``cargo build``
+    # itself, so it takes the same set plus its script's own tools.
+    for action in [recorderBuild, testsBuild.action, testsRun.action, cliVerify]:
+      appendRegisteredActionToolIdentityRefs(action.id,
+        ["cargo", "rustc", "nim", "nimble", "git", "capnp", "zstd"])
+      when defined(linux):
+        appendRegisteredActionToolIdentityRefs(action.id, ["gcc", "pkg-config", "openssl"])
+      elif defined(macosx):
+        appendRegisteredActionToolIdentityRefs(action.id, ["clang", "pkg-config", "openssl"])
+    when not defined(windows):
+      appendRegisteredActionToolIdentityRefs(testsRun.action.id, ["forc"])
+    appendRegisteredActionToolIdentityRefs(cliVerify.id, ["sh", "bash", "dirname", "grep"])
 
     discard collect("test", @[testsRun.action, cliVerify])
