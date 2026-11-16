@@ -9,8 +9,9 @@
 //! 2. **`ct print` content** — record a fixture and pipe the resulting
 //!    `.ct` container through `ct print` from
 //!    `codetracer-trace-format-nim` to make content-level assertions.
-//!    Skips gracefully when `ct-print` is not present (i.e. when this
-//!    crate is built outside the metacraft workspace).
+//!    `ct-print` is a hard prerequisite: when it is missing these tests
+//!    fail with a diagnostic instead of passing vacuously. `repro test`
+//!    builds it from the sibling checkout before running them.
 //! 3. **CLI env-var contract** — exercise the post-2026-05-08
 //!    `CODETRACER_FUEL_RECORDER_OUT_DIR` /
 //!    `CODETRACER_FUEL_RECORDER_DISABLED` env vars and the
@@ -105,10 +106,11 @@ fn ct_files_in(out_dir: &std::path::Path) -> Vec<PathBuf> {
 /// container through `ct-print --json` and assert on the resulting
 /// JSON.  This is the same workflow that `Recorder-CLI-Conventions.md`
 /// §4 prescribes for downstream tools / golden snapshots.
+///
+/// The trace-format-nim sibling lives at a fixed relative path within
+/// the workspace.  Tests reach it through [`require_ct_print`], which
+/// fails the test when the binary is missing.
 fn ct_print_path() -> PathBuf {
-    // The trace-format-nim sibling lives at a fixed relative path within
-    // the workspace.  Tests skip gracefully when it's not present (e.g.
-    // when this crate is built outside the metacraft workspace).
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("codetracer-trace-format-nim")
@@ -494,14 +496,15 @@ fn test_recorded_trace_via_ct_print_json() {
 /// Per the "no graceful skips" policy we used to silently bail when
 /// the binary wasn't built — that hid Windows-test failures behind
 /// Linux CI runs where ct-print isn't part of the recorder build.
-/// The fix is to provision ct-print, not to weaken the test.
+/// The fix is to provision ct-print, not to weaken the test: `repro
+/// test` builds it from the sibling checkout before running this file.
+/// The message matches `tests/test_source_level.rs`'s check.
 fn require_ct_print(test_name: &str) -> PathBuf {
     let p = ct_print_path();
     assert!(
         p.exists(),
-        "ct-print binary required for '{test_name}' at {} — build it via \
-         reprobuild or the trace-format-nim sibling recipe; do not skip the \
-         test silently",
+        "ct-print is required for '{test_name}' at {} (build it in the \
+         codetracer-trace-format-nim sibling)",
         p.display()
     );
     p
@@ -517,7 +520,7 @@ fn record_bytecode_and_dump_full(
     test_name: &str,
     program_name: &str,
     bytecode: Vec<u8>,
-) -> Option<serde_json::Value> {
+) -> serde_json::Value {
     let ct_print = require_ct_print(test_name);
 
     let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -562,7 +565,7 @@ fn record_bytecode_and_dump_full(
     // Preserve the temp dir until after the JSON is parsed, then drop.
     drop(temp_dir);
 
-    Some(doc)
+    doc
 }
 
 /// Decode the source-line sequence of every step event, in event order.
@@ -706,13 +709,11 @@ fn control_flow_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_control_flow_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_control_flow_test_via_ct_print_full",
         "control_flow_test",
         control_flow_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "control_flow_test");
 
@@ -1129,13 +1130,11 @@ fn collections_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_collections_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_collections_test_via_ct_print_full",
         "collections_test",
         collections_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "collections_test");
 
@@ -1218,13 +1217,11 @@ fn test_collections_test_via_ct_print_full() {
 
 #[test]
 fn test_collections_test_value_kinds_present() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_collections_test_value_kinds_present",
         "collections_test",
         collections_bytecode(),
-    ) else {
-        return;
-    };
+    );
     let mut kinds = std::collections::BTreeSet::new();
     for ev in doc["events"].as_array().unwrap() {
         if ev["kind"] != "step" {
@@ -1275,13 +1272,11 @@ fn error_paths_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_error_paths_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_error_paths_test_via_ct_print_full",
         "error_paths_test",
         error_paths_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "error_paths_test");
 
@@ -1369,13 +1364,11 @@ fn test_error_paths_test_via_ct_print_full() {
 
 #[test]
 fn test_error_paths_test_emits_revert_event() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_error_paths_test_emits_revert_event",
         "error_paths_test",
         error_paths_bytecode(),
-    ) else {
-        return;
-    };
+    );
     let io_events = observed_io_events(&doc);
     assert_eq!(
         io_events.len(),
@@ -1436,13 +1429,11 @@ fn while_loop_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_while_loop_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_while_loop_test_via_ct_print_full",
         "while_loop_test",
         while_loop_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "while_loop_test");
 
@@ -2232,13 +2223,11 @@ fn struct_decoding_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_struct_decoding_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_struct_decoding_test_via_ct_print_full",
         "struct_decoding_test",
         struct_decoding_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "struct_decoding_test");
 
@@ -2379,13 +2368,11 @@ fn panic_receipt_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_panic_receipt_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_panic_receipt_test_via_ct_print_full",
         "panic_receipt_test",
         panic_receipt_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "panic_receipt_test");
 
@@ -2505,13 +2492,11 @@ fn storage_block_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_storage_block_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_storage_block_test_via_ct_print_full",
         "storage_block_test",
         storage_block_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "storage_block_test");
 
@@ -2588,13 +2573,11 @@ fn storage_map_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_storage_map_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_storage_map_test_via_ct_print_full",
         "storage_map_test",
         storage_map_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "storage_map_test");
 
@@ -2837,13 +2820,11 @@ fn vec_dynamic_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_vec_dynamic_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_vec_dynamic_test_via_ct_print_full",
         "vec_dynamic_test",
         vec_dynamic_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "vec_dynamic_test");
 
@@ -3193,7 +3174,7 @@ fn record_variant_and_dump_full(
     test_name: &str,
     program_name: &str,
     bytecode: Vec<u8>,
-) -> Option<serde_json::Value> {
+) -> serde_json::Value {
     let ct_print = require_ct_print(test_name);
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -3219,19 +3200,17 @@ fn record_variant_and_dump_full(
         .expect("ct-print");
     let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     drop(temp_dir);
-    Some(doc)
+    doc
 }
 
 #[test]
 fn test_enum_tagged_union_test_via_ct_print_full() {
     let success_payload: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 42];
-    let Some(doc_success) = record_variant_and_dump_full(
+    let doc_success = record_variant_and_dump_full(
         "test_enum_tagged_union_test_via_ct_print_full",
         "enum_tagged_union_test_success",
         enum_tagged_union_bytecode(0, &success_payload),
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_success, "enum_tagged_union_test_success");
     let success_var = doc_success["events"]
         .as_array()
@@ -3264,13 +3243,11 @@ fn test_enum_tagged_union_test_via_ct_print_full() {
     );
 
     let failure_payload: Vec<u8> = b"FAILED!!".to_vec();
-    let Some(doc_failure) = record_variant_and_dump_full(
+    let doc_failure = record_variant_and_dump_full(
         "test_enum_tagged_union_test_via_ct_print_full",
         "enum_tagged_union_test_failure",
         enum_tagged_union_bytecode(1, &failure_payload),
-    ) else {
-        return;
-    };
+    );
     let failure_var = doc_failure["events"]
         .as_array()
         .unwrap()
@@ -3311,13 +3288,11 @@ fn test_enum_tagged_union_test_via_ct_print_full() {
          (recorder pins str[8] payload to slice/view semantics)"
     );
 
-    let Some(doc_skipped) = record_variant_and_dump_full(
+    let doc_skipped = record_variant_and_dump_full(
         "test_enum_tagged_union_test_via_ct_print_full",
         "enum_tagged_union_test_skipped",
         enum_tagged_union_bytecode(2, &[]),
-    ) else {
-        return;
-    };
+    );
     let skipped_var = doc_skipped["events"]
         .as_array()
         .unwrap()
@@ -3362,13 +3337,11 @@ fn storage_vec_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_storage_vec_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_storage_vec_test_via_ct_print_full",
         "storage_vec_test",
         storage_vec_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "storage_vec_test");
 
@@ -4017,7 +3990,7 @@ fn record_with_abi_and_dump_full(
     program_name: &str,
     bytecode: Vec<u8>,
     abi_json: &str,
-) -> Option<serde_json::Value> {
+) -> serde_json::Value {
     let ct_print = require_ct_print(test_name);
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -4042,20 +4015,18 @@ fn record_with_abi_and_dump_full(
         .expect("ct-print");
     let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     drop(temp_dir);
-    Some(doc)
+    doc
 }
 
 #[test]
 fn test_option_result_test_via_ct_print_full() {
     // ----- Some(42) -------------------------------------------------------
-    let Some(doc_some) = record_with_abi_and_dump_full(
+    let doc_some = record_with_abi_and_dump_full(
         "test_option_result_test_via_ct_print_full",
         "option_result_test_some",
         option_some_bytecode(42),
         OPTION_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_some, "option_result_test_some");
     let some_var = doc_some["events"]
         .as_array()
@@ -4089,14 +4060,12 @@ fn test_option_result_test_via_ct_print_full() {
     );
 
     // ----- None -----------------------------------------------------------
-    let Some(doc_none) = record_with_abi_and_dump_full(
+    let doc_none = record_with_abi_and_dump_full(
         "test_option_result_test_via_ct_print_full",
         "option_result_test_none",
         option_none_bytecode(),
         OPTION_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let none_var = doc_none["events"]
         .as_array()
         .unwrap()
@@ -4127,14 +4096,12 @@ fn test_option_result_test_via_ct_print_full() {
     );
 
     // ----- Ok(42) ---------------------------------------------------------
-    let Some(doc_ok) = record_with_abi_and_dump_full(
+    let doc_ok = record_with_abi_and_dump_full(
         "test_option_result_test_via_ct_print_full",
         "option_result_test_ok",
         result_ok_bytecode(42),
         RESULT_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let ok_var = doc_ok["events"]
         .as_array()
         .unwrap()
@@ -4162,14 +4129,12 @@ fn test_option_result_test_via_ct_print_full() {
     );
 
     // ----- Err("boom") ----------------------------------------------------
-    let Some(doc_err) = record_with_abi_and_dump_full(
+    let doc_err = record_with_abi_and_dump_full(
         "test_option_result_test_via_ct_print_full",
         "option_result_test_err",
         result_err_bytecode(b"boom"),
         RESULT_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let err_var = doc_err["events"]
         .as_array()
         .unwrap()
@@ -4266,14 +4231,12 @@ const INTEGER_WIDTHS_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_integer_widths_test_via_ct_print_full() {
-    let Some(doc) = record_with_abi_and_dump_full(
+    let doc = record_with_abi_and_dump_full(
         "test_integer_widths_test_via_ct_print_full",
         "integer_widths_test",
         integer_widths_bytecode(),
         INTEGER_WIDTHS_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "integer_widths_test");
 
@@ -4515,7 +4478,7 @@ fn record_match_arm_and_dump_full(
     program_name: &str,
     discriminator: u8,
     payload: &[u8],
-) -> Option<serde_json::Value> {
+) -> serde_json::Value {
     let ct_print = require_ct_print(test_name);
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let out_dir = temp_dir.path().join("traces");
@@ -4540,7 +4503,7 @@ fn record_match_arm_and_dump_full(
         .expect("ct-print");
     let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     drop(temp_dir);
-    Some(doc)
+    doc
 }
 
 #[test]
@@ -4583,14 +4546,12 @@ fn test_match_pattern_test_via_ct_print_full() {
     let mut step_walks: Vec<(String, Vec<i64>)> = Vec::new();
 
     for (program_name, disc, payload, want_arm, want_value, body_base_line) in &runs {
-        let Some(doc) = record_match_arm_and_dump_full(
+        let doc = record_match_arm_and_dump_full(
             "test_match_pattern_test_via_ct_print_full",
             program_name,
             *disc,
             payload,
-        ) else {
-            return;
-        };
+        );
 
         assert_metadata_program_eq(&doc, program_name);
 
@@ -4785,14 +4746,12 @@ const BYTES_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_bytes_test_via_ct_print_full() {
-    let Some(doc) = record_with_abi_and_dump_full(
+    let doc = record_with_abi_and_dump_full(
         "test_bytes_test_via_ct_print_full",
         "bytes_test",
         bytes_test_bytecode(),
         BYTES_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "bytes_test");
 
@@ -5022,14 +4981,12 @@ const ASSET_ID_ABI_JSON: &str = r#"{
 #[test]
 fn test_identity_address_contractid_test_via_ct_print_full() {
     // ----- Identity::Address(b256) ---------------------------------------
-    let Some(doc_addr) = record_with_abi_and_dump_full(
+    let doc_addr = record_with_abi_and_dump_full(
         "test_identity_address_contractid_test_via_ct_print_full",
         "identity_address_contractid_test_addr",
         identity_bytecode(0, 0xAA),
         IDENTITY_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_addr, "identity_address_contractid_test_addr");
     let addr_var = doc_addr["events"]
         .as_array()
@@ -5085,14 +5042,12 @@ fn test_identity_address_contractid_test_via_ct_print_full() {
     );
 
     // ----- Identity::ContractId(b256) ------------------------------------
-    let Some(doc_cid) = record_with_abi_and_dump_full(
+    let doc_cid = record_with_abi_and_dump_full(
         "test_identity_address_contractid_test_via_ct_print_full",
         "identity_address_contractid_test_cid",
         identity_bytecode(1, 0xBB),
         IDENTITY_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let cid_var = doc_cid["events"]
         .as_array()
         .unwrap()
@@ -5124,14 +5079,12 @@ fn test_identity_address_contractid_test_via_ct_print_full() {
     );
 
     // ----- raw Address (32-byte b256-style payload) ----------------------
-    let Some(doc_raw_addr) = record_with_abi_and_dump_full(
+    let doc_raw_addr = record_with_abi_and_dump_full(
         "test_identity_address_contractid_test_via_ct_print_full",
         "identity_address_contractid_test_raw_addr",
         raw_identity_bytecode(0xCC),
         ADDRESS_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let raw_addr_var = doc_raw_addr["events"]
         .as_array()
         .unwrap()
@@ -5167,14 +5120,12 @@ fn test_identity_address_contractid_test_via_ct_print_full() {
     );
 
     // ----- raw ContractId — same shape, distinct ABI ---------------------
-    let Some(doc_raw_cid) = record_with_abi_and_dump_full(
+    let doc_raw_cid = record_with_abi_and_dump_full(
         "test_identity_address_contractid_test_via_ct_print_full",
         "identity_address_contractid_test_raw_cid",
         raw_identity_bytecode(0xDD),
         CONTRACT_ID_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let raw_cid_var = doc_raw_cid["events"]
         .as_array()
         .unwrap()
@@ -5194,14 +5145,12 @@ fn test_identity_address_contractid_test_via_ct_print_full() {
     );
 
     // ----- raw AssetId — same shape, distinct ABI ------------------------
-    let Some(doc_raw_aid) = record_with_abi_and_dump_full(
+    let doc_raw_aid = record_with_abi_and_dump_full(
         "test_identity_address_contractid_test_via_ct_print_full",
         "identity_address_contractid_test_raw_aid",
         raw_identity_bytecode(0xEE),
         ASSET_ID_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
     let raw_aid_var = doc_raw_aid["events"]
         .as_array()
         .unwrap()
@@ -5276,13 +5225,11 @@ fn log_builtin_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_log_builtin_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_log_builtin_test_via_ct_print_full",
         "log_builtin_test",
         log_builtin_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "log_builtin_test");
 
@@ -5483,13 +5430,11 @@ fn revert_direct_bytecode(code: u32) -> Vec<u8> {
 #[test]
 fn test_require_revert_test_via_ct_print_full() {
     // ----- failing require(condition, 5) ---------------------------------
-    let Some(doc_fail) = record_bytecode_and_dump_full(
+    let doc_fail = record_bytecode_and_dump_full(
         "test_require_revert_test_via_ct_print_full",
         "require_revert_test_failing",
         require_failing_bytecode(5),
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_fail, "require_revert_test_failing");
     let counts_fail = &doc_fail["counts"];
     assert_eq!(
@@ -5523,13 +5468,11 @@ fn test_require_revert_test_via_ct_print_full() {
     );
 
     // ----- successful require(condition, 0) — no error io_event ----------
-    let Some(doc_ok) = record_bytecode_and_dump_full(
+    let doc_ok = record_bytecode_and_dump_full(
         "test_require_revert_test_via_ct_print_full",
         "require_revert_test_success",
         require_success_bytecode(),
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_ok, "require_revert_test_success");
     let counts_ok = &doc_ok["counts"];
     assert_eq!(
@@ -5546,13 +5489,11 @@ fn test_require_revert_test_via_ct_print_full() {
     );
 
     // ----- revert(42) — direct revert builtin ----------------------------
-    let Some(doc_revert) = record_bytecode_and_dump_full(
+    let doc_revert = record_bytecode_and_dump_full(
         "test_require_revert_test_via_ct_print_full",
         "require_revert_test_direct_revert",
         revert_direct_bytecode(42),
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_revert, "require_revert_test_direct_revert");
     let counts_revert = &doc_revert["counts"];
     assert_eq!(
@@ -5633,13 +5574,11 @@ fn test_hashing_test_via_ct_print_full() {
     let want_keccak = "a766932420cc6e9072394bef2c036ad8972c44696fee29397bd5e2c06001f615";
 
     // ----- sha256(b"h") --------------------------------------------------
-    let Some(doc_sha) = record_bytecode_and_dump_full(
+    let doc_sha = record_bytecode_and_dump_full(
         "test_hashing_test_via_ct_print_full",
         "hashing_test_sha256",
         hashing_bytecode(HashKind::Sha256, b'h'),
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_sha, "hashing_test_sha256");
     let counts_sha = &doc_sha["counts"];
     assert_eq!(
@@ -5705,13 +5644,11 @@ fn test_hashing_test_via_ct_print_full() {
     );
 
     // ----- keccak256(b"h") -----------------------------------------------
-    let Some(doc_keccak) = record_bytecode_and_dump_full(
+    let doc_keccak = record_bytecode_and_dump_full(
         "test_hashing_test_via_ct_print_full",
         "hashing_test_keccak256",
         hashing_bytecode(HashKind::Keccak256, b'h'),
-    ) else {
-        return;
-    };
+    );
     assert_metadata_program_eq(&doc_keccak, "hashing_test_keccak256");
     let counts_keccak = &doc_keccak["counts"];
     assert_eq!(
@@ -5887,14 +5824,12 @@ const B256_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_b256_test_via_ct_print_full() {
-    let Some(doc) = record_with_abi_and_dump_full(
+    let doc = record_with_abi_and_dump_full(
         "test_b256_test_via_ct_print_full",
         "b256_test",
         b256_test_bytecode(),
         B256_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "b256_test");
 
@@ -6502,13 +6437,11 @@ fn inline_asm_bytecode() -> Vec<u8> {
 
 #[test]
 fn test_inline_asm_test_via_ct_print_full() {
-    let Some(doc) = record_bytecode_and_dump_full(
+    let doc = record_bytecode_and_dump_full(
         "test_inline_asm_test_via_ct_print_full",
         "inline_asm_test",
         inline_asm_bytecode(),
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "inline_asm_test");
 
@@ -6676,14 +6609,12 @@ const CONFIGURABLE_ABI_JSON: &str = r#"{
 
 #[test]
 fn test_configurable_test_via_ct_print_full() {
-    let Some(doc) = record_with_abi_and_dump_full(
+    let doc = record_with_abi_and_dump_full(
         "test_configurable_test_via_ct_print_full",
         "configurable_test",
         configurable_bytecode(),
         CONFIGURABLE_ABI_JSON,
-    ) else {
-        return;
-    };
+    );
 
     assert_metadata_program_eq(&doc, "configurable_test");
 

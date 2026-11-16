@@ -25,6 +25,7 @@
 
 import repro_project_dsl
 import repro_dsl_stdlib/foreign_env
+import "../codetracer-trace-format-nim/build_writer_artifacts"
 
 package codetracer_fuel_recorder:
   defaultToolProvisioning (when defined(windows): tarball else: path)
@@ -38,8 +39,11 @@ package codetracer_fuel_recorder:
     "cargo >=1.85"
     # C compiler driver — rustc links through `cc`, and build scripts
     # (cc-rs, the Nim FFI) compile C. Declaring it puts its directory on
-    # every cargo edge's PATH. Windows links with MSVC instead.
-    when defined(linux):
+    # every cargo edge's PATH. Windows Cargo links with MSVC instead; the
+    # owning ct-print constructor (``build_writer_artifacts.buildCtPrint``)
+    # separately compiles with GCC on Windows, so ``gcc`` is declared there
+    # for that edge only (the Windows cargo edges do not register it).
+    when defined(linux) or defined(windows):
       "gcc"
     elif defined(macosx):
       "clang"
@@ -55,6 +59,16 @@ package codetracer_fuel_recorder:
     # libzstd headers + library, needed when linking the Nim FFI
     # static library into the cargo build.
     "zstd"
+    # zstd.h + libzstd for the sibling ct-print edge
+    # (``build_writer_artifacts.buildCtPrint`` compiles and links against
+    # them; ``zstd`` is the CLI only). The ct-print edge needs both on every
+    # host, so this is declared on Windows too: there reprobuild provisions
+    # ``zstd-dev`` from a tarball whose prefix holds ``zstd.h`` and a static
+    # ``libzstd.a``, which ct-print links with ``-lzstd``. The constructor
+    # cannot provision a tool from inside ``build:`` and refuses a recipe
+    # that omits any of ``CtPrintToolSelectors`` (the C compiler plus
+    # ``zstd-dev``), on Windows as on POSIX.
+    "zstd-dev"
 
     # pkg-config + OpenSSL — openssl-sys consults pkg-config to find
     # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
@@ -159,6 +173,8 @@ package codetracer_fuel_recorder:
     # remaining test cases (the fuel-asm-built ones, ``ct print``
     # smoke tests, CTFS-header asserts) pass exactly as on Linux.
 
+    const nimRoot = "../codetracer-trace-format-nim"
+
     let testsBuild = cargo.test(
       locked = true,
       noRun = true,
@@ -169,14 +185,26 @@ package codetracer_fuel_recorder:
       ],
       extraOutputs = @["target/debug/deps"])
 
+    # ``tests/test_source_level.rs`` decodes every recording through the
+    # sibling's ``ct-print`` and fails when it is absent, so the run depends
+    # on the edge that builds it rather than on a binary some earlier build
+    # happened to leave in the sibling checkout. The decoder edge runs after
+    # the test build: that build's ``codetracer_trace_writer_nim``
+    # ``build.rs`` is what installs the sibling's nimble ``requires``
+    # (``results``, ``stew``) into the nimble path ``buildCtPrint``'s compile
+    # resolves them from (its doc comment asks a recorder to pass that edge
+    # here).
+    let decoderBuild = buildCtPrint(nimRoot, after = @[testsBuild.action])
+    let decoderBinary = ctPrintPath(nimRoot)
+
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-fuel-recorder.cargo-test-run",
-      after = @[testsBuild.action],
+      after = @[testsBuild.action, decoderBuild],
       extraInputs = @[
         "Cargo.toml", "Cargo.lock",
         "src", "tests",
-        "target/debug/deps"
+        "target/debug/deps", decoderBinary
       ])
 
     # ---- CLI-convention verification edge -----------------------------
@@ -220,6 +248,8 @@ package codetracer_fuel_recorder:
     # Windows registers no C compiler: Cargo links with MSVC there and the
     # Nim FFI compiles with ``--cc:vcc``. The CLI check runs ``cargo build``
     # itself, so it takes the same set plus its script's own tools.
+    # The ``ct-print`` edge's tools are its constructor's (``buildCtPrint``),
+    # not declared here.
     for action in [recorderBuild, testsBuild.action, testsRun.action, cliVerify]:
       appendRegisteredActionToolIdentityRefs(action.id,
         ["cargo", "rustc", "nim", "nimble", "git", "capnp", "zstd"])
