@@ -73,6 +73,16 @@ package codetracer_fuel_recorder:
     # ``nimble install --depsOnly`` in ``codetracer_trace_writer_nim``'s
     # build.rs fetches the FFI's requirements with git.
     "git"
+    # just runs the Justfile recipes, which CI's cross-check steps call
+    # through `dev-exec` (`repro exec`), so it must be declared here: the
+    # activated environment's PATH is the runner's plus the declared tools,
+    # and the Windows runner has no `just`.
+    "just"
+    # ``just test`` (and ``just lint``) start with ``python3 -m unittest``
+    # over ``tests/test_canonical_hook_installation.py``, so the cross-check
+    # needs python3 in the activated environment on every lane. The flake dev
+    # shell supplies it on Linux/macOS; on Windows reprobuild realizes it.
+    "python3"
 
     # Language-specific compiler / runtime tools. ``forc`` (the Sway
     # compiler) is Linux/macOS-only — FuelLabs/sway publishes no
