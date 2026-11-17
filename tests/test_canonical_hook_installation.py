@@ -6,6 +6,7 @@ checker implementations owned by their upstream packages.
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,33 @@ class SelectedReproInstallation(unittest.TestCase):
                 self.assertTrue((root / "canonical-smoke-ran").is_file())
                 (root / "canonical-smoke-ran").unlink()
 
+    def test_group_writable_umask_installs_owner_only_writable_hooks(self):
+        # Regression: self-hosted runners run with umask 002, under which Repro
+        # and Prek create 0775 hooks and the installer used to refuse its own
+        # private generation ("selected Repro generated invalid managed hook").
+        # The installer must pin the umask for the hooks it generates, so the
+        # outcome is the same 0755 shape as under the common 022 default.
+        # The installer subprocess inherits this test's umask.
+        previous_umask = os.umask(0o002)
+        self.addCleanup(os.umask, previous_umask)
+        repro = os.environ.get("REPROBUILD_REPRO") or shutil.which("repro")
+        self.assertIsNotNone(repro, "real Repro required")
+        with tempfile.TemporaryDirectory(prefix="fuel-umask-hook-") as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            (root / ".pre-commit-config.yaml").write_text("repos: []\n")
+            for _ in range(2):
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "tools/install-canonical-hooks.py"), "--repro", repro],
+                    cwd=root, text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                for name in ("pre-commit", "pre-commit.repro-managed", "pre-push",
+                             "pre-push.repro-managed", "pre-commit.repro-local"):
+                    target = root / ".git/hooks" / name
+                    self.assertFalse(target.is_symlink(), name)
+                    self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755, name)
+
     def test_modified_managed_publication_hook_refuses_without_writes(self):
         repro = os.environ.get("REPROBUILD_REPRO") or shutil.which("repro")
         self.assertIsNotNone(repro, "real Repro required")
@@ -53,7 +81,13 @@ class SelectedReproInstallation(unittest.TestCase):
             (root / ".pre-commit-config.yaml").write_text("repos: []\n")
             subprocess.run([repro, "hooks", "ensure", "--vcs", str(root)], check=True, capture_output=True)
             hooks = root / ".git/hooks"
-            for name in ("pre-commit", "pre-commit.repro-managed", "pre-push", "pre-push.repro-managed"):
+            names = ("pre-commit", "pre-commit.repro-managed", "pre-push", "pre-push.repro-managed")
+            # Repro honours this process's umask, so under umask 002 the fixture
+            # hooks would start out 0775 and every subtest would be refused for
+            # the untouched hooks' mode instead of the one mutation it makes.
+            for name in names:
+                (hooks / name).chmod(0o755)
+            for name in names:
                 target = hooks / name
                 original = target.read_bytes()
                 for mutation in ("body", "mode"):
