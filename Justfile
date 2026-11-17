@@ -10,10 +10,25 @@ build:
 build-release:
   cargo build --release --locked
 
-test:
-  python3 -m unittest discover -s tests -p test_canonical_hook_installation.py
+test: test-hook-installer test-portable
+
+# `test` minus its POSIX-only part, for hosts without POSIX tooling (the
+# Windows lanes of the reprobuild CI workflow run this; Linux and macOS run
+# `test`). Excluded, and why:
+#
+# - `test-hook-installer`: the canonical git-hook installer tests run the
+#   `prek` hook manager, which has no Windows package in the build
+#   environment, assert POSIX file modes (0o755) on the installed hooks, and
+#   execute the hooks through `/bin/sh`.
+#
+# Everything else `test` runs is here, in the same order.
+test-portable:
   cargo test --locked
   bash tests/verify-cli-convention-no-silent-skip.sh
+
+# POSIX-only: see `test-portable` above.
+test-hook-installer:
+  python3 -m unittest discover -s tests -p test_canonical_hook_installation.py
 
 t: test
 
