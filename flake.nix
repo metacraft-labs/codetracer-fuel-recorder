@@ -55,6 +55,11 @@
             pkgs.rustfmt
             pkgs.clippy
             pkgs.pkg-config
+            # `just verify-packaging-sources` (run by `just lint`): ruby
+            # syntax-checks the Homebrew formula (python3, above, runs the
+            # `verify-package` recipe). The check fails rather than skips
+            # without it, so the shell provides it instead of the host.
+            pkgs.ruby
           ];
 
           # `cargo <subcommand>` looks for `cargo-<subcommand>` in
