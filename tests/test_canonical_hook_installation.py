@@ -15,23 +15,41 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def scratch_env():
+    """This process's environment without Git's repository variables.
+
+    A Git hook inherits GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and friends from
+    the git command that runs it, and the owning-lint hook runs this suite. With
+    them inherited, `git init <scratch>` reinitialises the repository GIT_DIR
+    names (from a linked worktree it records core.worktree in the main
+    checkout's config) and the installer's `rev-parse --show-toplevel` answers
+    for that repository instead of the scratch one. Every subprocess this suite
+    starts gets this environment, so the suite never writes to the repository
+    it is run from and behaves the same from a hook, a linked worktree and a
+    plain shell. tools/install-canonical-hooks.py isolates its own private
+    generation the same way.
+    """
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 class SelectedReproInstallation(unittest.TestCase):
     def test_current_engine_installs_and_reinstalls(self):
         repro = os.environ.get("REPROBUILD_REPRO") or shutil.which("repro")
         self.assertIsNotNone(repro, "real Repro required")
         with tempfile.TemporaryDirectory(prefix="fuel-selected-hook-") as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            subprocess.run(["git", "init", "--quiet", str(root)], env=scratch_env(), check=True)
             (root / ".pre-commit-config.yaml").write_text("repos:\n- repo: local\n  hooks:\n  - id: smoke\n    name: smoke\n    entry: /bin/sh -c 'touch canonical-smoke-ran'\n    language: system\n    always_run: true\n    pass_filenames: false\n")
             expected_root = root / "factory"
-            subprocess.run(["git", "init", "--quiet", str(expected_root)], check=True)
-            subprocess.run([repro, "hooks", "ensure", "--vcs", str(expected_root)], check=True, capture_output=True)
+            subprocess.run(["git", "init", "--quiet", str(expected_root)], env=scratch_env(), check=True)
+            subprocess.run([repro, "hooks", "ensure", "--vcs", str(expected_root)], env=scratch_env(),
+                           check=True, capture_output=True)
             expected = {name: (expected_root / ".git/hooks" / name).read_bytes()
                         for name in ("pre-commit", "pre-commit.repro-managed", "pre-push", "pre-push.repro-managed")}
             for _ in range(2):
                 result = subprocess.run(
                     [sys.executable, str(ROOT / "tools/install-canonical-hooks.py"), "--repro", repro],
-                    cwd=root, text=True, capture_output=True,
+                    cwd=root, env=scratch_env(), text=True, capture_output=True,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 local = root / ".git/hooks/pre-commit.repro-local"
@@ -40,7 +58,7 @@ class SelectedReproInstallation(unittest.TestCase):
                 for name, body in expected.items():
                     self.assertEqual((root / ".git/hooks" / name).read_bytes(), body)
                 hook = root / ".git/hooks/pre-commit"
-                checked = subprocess.run([str(hook)], cwd=root, text=True, capture_output=True)
+                checked = subprocess.run([str(hook)], cwd=root, env=scratch_env(), text=True, capture_output=True)
                 self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
                 self.assertTrue((root / "canonical-smoke-ran").is_file())
                 (root / "canonical-smoke-ran").unlink()
@@ -58,12 +76,12 @@ class SelectedReproInstallation(unittest.TestCase):
         self.assertIsNotNone(repro, "real Repro required")
         with tempfile.TemporaryDirectory(prefix="fuel-umask-hook-") as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            subprocess.run(["git", "init", "--quiet", str(root)], env=scratch_env(), check=True)
             (root / ".pre-commit-config.yaml").write_text("repos: []\n")
             for _ in range(2):
                 result = subprocess.run(
                     [sys.executable, str(ROOT / "tools/install-canonical-hooks.py"), "--repro", repro],
-                    cwd=root, text=True, capture_output=True,
+                    cwd=root, env=scratch_env(), text=True, capture_output=True,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 for name in ("pre-commit", "pre-commit.repro-managed", "pre-push",
@@ -77,9 +95,10 @@ class SelectedReproInstallation(unittest.TestCase):
         self.assertIsNotNone(repro, "real Repro required")
         with tempfile.TemporaryDirectory(prefix="fuel-refused-hook-") as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            subprocess.run(["git", "init", "--quiet", str(root)], env=scratch_env(), check=True)
             (root / ".pre-commit-config.yaml").write_text("repos: []\n")
-            subprocess.run([repro, "hooks", "ensure", "--vcs", str(root)], check=True, capture_output=True)
+            subprocess.run([repro, "hooks", "ensure", "--vcs", str(root)], env=scratch_env(),
+                           check=True, capture_output=True)
             hooks = root / ".git/hooks"
             names = ("pre-commit", "pre-commit.repro-managed", "pre-push", "pre-push.repro-managed")
             # Repro honours this process's umask, so under umask 002 the fixture
@@ -96,12 +115,73 @@ class SelectedReproInstallation(unittest.TestCase):
                         target.chmod(0o644 if mutation == "mode" else 0o755)
                         before = {p.name: (p.read_bytes(), p.stat().st_mode) for p in hooks.iterdir()}
                         result = subprocess.run([sys.executable, str(ROOT / "tools/install-canonical-hooks.py"),
-                                                "--repro", repro], cwd=root, capture_output=True, text=True)
+                                                "--repro", repro], cwd=root, env=scratch_env(),
+                                                capture_output=True, text=True)
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn("unknown or modified managed hook", result.stderr)
                         self.assertEqual({p.name: (p.read_bytes(), p.stat().st_mode) for p in hooks.iterdir()}, before)
                 target.write_bytes(original)
                 target.chmod(0o755)
+
+
+class HookEnvironmentIsolation(unittest.TestCase):
+    """The suite must not write to the repository whose hook runs it.
+
+    Runs SelectedReproInstallation in a child process under each Git
+    environment a commit hook in a linked worktree can inherit, against a
+    scratch main repository and linked worktree that stand in for the real
+    checkout, so a regression damages only them. The shapes, measured with
+    git 2.51 and prek 0.2.17:
+
+    - git itself hands a hook GIT_DIR (the worktree's private Git directory)
+      and GIT_INDEX_FILE; `git init` then marks the main repository bare;
+    - prek drops GIT_DIR and passes GIT_INDEX_FILE on, so the scratch hook
+      the tests run reads the invoking worktree's index and fails
+      ("Failed to clean work tree");
+    - with GIT_WORK_TREE as well, `git init` records core.worktree in the main
+      repository's config, the damage the recorded issue observed.
+
+    Each shape must leave the main config and the worktree's index untouched
+    and the class must pass.
+    """
+
+    def test_installation_tests_leave_the_invoking_repository_untouched(self):
+        shapes = {
+            "git": ("GIT_DIR", "GIT_INDEX_FILE"),
+            "prek": ("GIT_INDEX_FILE",),
+            "work-tree": ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"),
+        }
+        for shape, names in shapes.items():
+            # A fresh pair per shape, so damage from one cannot mask another.
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory(prefix="fuel-invoking-repo-") as directory:
+                main = Path(directory) / "main"
+                linked = Path(directory) / "linked"
+                git = ["git", "-c", "user.name=t", "-c", "user.email=t@invalid"]
+                subprocess.run(git + ["init", "--quiet", str(main)], env=scratch_env(), check=True)
+                subprocess.run(git + ["-C", str(main), "commit", "--quiet", "--allow-empty", "-m", "base"],
+                               env=scratch_env(), check=True)
+                subprocess.run(git + ["-C", str(main), "worktree", "add", "--quiet", str(linked)],
+                               env=scratch_env(), check=True)
+                # A staged change stands in for the commit the hook is checking.
+                (linked / "staged").write_text("staged\n")
+                subprocess.run(git + ["-C", str(linked), "add", "staged"], env=scratch_env(), check=True)
+                private = main / ".git/worktrees/linked"
+                index = private / "index"
+                values = {"GIT_DIR": str(private), "GIT_WORK_TREE": str(linked), "GIT_INDEX_FILE": str(index)}
+                config_before = (main / ".git/config").read_bytes()
+                index_before = index.read_bytes()
+                hook_env = scratch_env()
+                hook_env.update({name: values[name] for name in names})
+                result = subprocess.run(
+                    [sys.executable, "-m", "unittest",
+                     "test_canonical_hook_installation.SelectedReproInstallation"],
+                    cwd=Path(__file__).resolve().parent, env=hook_env, text=True, capture_output=True,
+                )
+                self.assertEqual((main / ".git/config").read_bytes(), config_before,
+                                 "the suite rewrote the invoking repository's config")
+                self.assertEqual(index.read_bytes(), index_before,
+                                 "the suite rewrote the invoking worktree's index")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
